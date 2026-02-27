@@ -13,7 +13,8 @@ COMMAND Commands[] = {
     {L"dir",CMDls,L"Alias for ls"},
     {L"cd",CMDcd,L"Change working dir"},
     {L"pwd",CMDpwd,L"Print working dir"},
-    {L"mkdir",CMDmkdir,L"Create directory"}
+    {L"mkdir",CMDmkdir,L"Create directory"},
+    {L"rm",CMDrm,L"Remove file or directory"}
 };
 UINTN CMD_COUNT = sizeof(Commands) / sizeof(COMMAND);
 
@@ -169,6 +170,29 @@ EFI_STATUS CMDmkdir(CHAR16 *Args){
         
     }else Print(L"Error : %u",status);
 
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS CMDrm(CHAR16 *Args)
+{
+    if(!Args){
+        CPrint(Info,L"Usage : rm <file/folder>\n");
+        return EFI_INVALID_PARAMETER;
+    }
+    EFI_FILE_PROTOCOL *temp;
+    EFI_STATUS status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,0);
+    if(status == EFI_NOT_FOUND){
+        CPrint(Error,L"%s not found\n",Args);
+        return status;
+    }
+    if(status == EFI_SUCCESS){
+        status = uefi_call_wrapper(temp->Delete,1,temp);
+        if(status == EFI_WARN_DELETE_FAILURE){
+            CPrint(Warning,L"Failed to delete %s\n",Args);
+            return status;
+        }
+        
+    }
     return EFI_SUCCESS;
 }
 

@@ -15,7 +15,9 @@ CHAR16 WaitForInput()
     if(EFI_ERROR(status)){
         return 0;
     }
-    return Key.UnicodeChar;
+    // Convert QWERTY to AZERTY; comment line 19 and uncomment line 20 to disable this feature
+    return QwertyToAzerty(Key.UnicodeChar);
+    //return Key.UnicodeChar;
 }
 
 CHAR16* WaitForCommand(){

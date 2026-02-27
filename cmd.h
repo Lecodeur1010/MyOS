@@ -23,5 +23,6 @@ EFI_STATUS CMDexit(CHAR16* Args);
 EFI_STATUS CMDls(CHAR16* Args);
 EFI_STATUS CMDcd(CHAR16* Args);
 EFI_STATUS CMDpwd(CHAR16* Args);
+EFI_STATUS CMDmkdir(CHAR16* Args);
 void Init(EFI_HANDLE ImageHandle);
 #endif

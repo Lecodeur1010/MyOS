@@ -12,14 +12,15 @@ COMMAND Commands[] = {
     {L"ls",CMDls,L"List directory content"},
     {L"dir",CMDls,L"Alias for ls"},
     {L"cd",CMDcd,L"Change working dir"},
-    {L"pwd",CMDpwd,L"Print working dir"}
+    {L"pwd",CMDpwd,L"Print working dir"},
+    {L"mkdir",CMDmkdir,L"Create directory"}
 };
 UINTN CMD_COUNT = sizeof(Commands) / sizeof(COMMAND);
 
 EFI_STATUS CMDpower(CHAR16* Args) {
     if (!Args || !StrCmp(Args,L"help") ){CPrint(Info,L"Usage : power off|reset\n");return EFI_INVALID_PARAMETER;}
-    else if(!StrCmp(Args,L"off")) {gST->RuntimeServices->ResetSystem(EfiResetShutdown,EFI_SUCCESS,0,NULL);}
-    else if(!StrCmp(Args,L"reset")) {gST->RuntimeServices->ResetSystem(EfiResetWarm,EFI_SUCCESS,0,NULL);}
+    else if(!StrCmp(Args,L"off")) {uefi_call_wrapper(RT->ResetSystem,4,EfiResetShutdown,EFI_SUCCESS,0,NULL);}
+    else if(!StrCmp(Args,L"reset")) {uefi_call_wrapper(RT->ResetSystem,4,EfiResetWarm,EFI_SUCCESS,0,NULL);}
     else {CPrint(Error,L"Unknown parameter : %s",Args);return EFI_INVALID_PARAMETER;}
     return EFI_SUCCESS;
 
@@ -121,13 +122,22 @@ EFI_STATUS CMDcd(CHAR16 *Args)
         uefi_call_wrapper(gBS->AllocatePool,3,EfiLoaderData,BufferSize,(VOID**)&FileInfo);
         uefi_call_wrapper(temp->GetInfo,4,temp,&gEfiFileInfoGuid,&BufferSize,FileInfo);
         if (FileInfo->Attribute & EFI_FILE_DIRECTORY) {
+            if(*Args==L'\\'){
+                void* newDir = AllocatePool(sizeof(CHAR16)*(StrLen(Args)+1));
+                if(!newDir)return EFI_ABORTED;
+                StrCpy(newDir,Args);
+                FreePool(WorkingDir);
+                WorkingDir = newDir;
+                WorkingDirSize = StrLen(newDir);
+            }
             uefi_call_wrapper(ActualDir->Close, 1, ActualDir);
             ActualDir = temp;
-            UpdateDir(Args);
+            if(*Args!=L'\\')UpdateDir(Args);
             FreePool(FileInfo);
         } else {
             CPrint(Error,L"Folder %s not found\n",Args);
             FreePool(FileInfo);
+            temp->Close(temp);
             return EFI_NOT_FOUND;
         }
     }
@@ -136,6 +146,29 @@ EFI_STATUS CMDcd(CHAR16 *Args)
 
 EFI_STATUS CMDpwd(CHAR16 *Args){
     CPrint(Info,L"%s\n",WorkingDir);
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS CMDmkdir(CHAR16 *Args){
+    if(!Args){
+        CPrint(Info,L"Usage : mkdir <folder>\n");
+        return EFI_INVALID_PARAMETER;
+    }
+    EFI_FILE_PROTOCOL *temp;
+    EFI_STATUS status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ,0);
+    if(status == EFI_SUCCESS){
+        CPrint(Warning,L"%s already exist \n",Args);
+        uefi_call_wrapper(temp->Close,1,temp);
+        return EFI_ABORTED;
+    }
+    else if(status==EFI_NOT_FOUND){
+        status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,EFI_FILE_DIRECTORY);
+        if(EFI_ERROR(status))return status;
+        CPrint(Info,L"%s created successfuly !\n",Args);
+        uefi_call_wrapper(temp->Close,1,temp);
+        
+    }else Print(L"Error : %u",status);
+
     return EFI_SUCCESS;
 }
 

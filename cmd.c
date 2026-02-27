@@ -17,7 +17,7 @@ COMMAND Commands[] = {
 UINTN CMD_COUNT = sizeof(Commands) / sizeof(COMMAND);
 
 EFI_STATUS CMDpower(CHAR16* Args) {
-    if (!Args || !StrCmp(Args,L"help") ){CPrint(Info,L"Usage : power off|reset\n");}
+    if (!Args || !StrCmp(Args,L"help") ){CPrint(Info,L"Usage : power off|reset\n");return EFI_INVALID_PARAMETER;}
     else if(!StrCmp(Args,L"off")) {gST->RuntimeServices->ResetSystem(EfiResetShutdown,EFI_SUCCESS,0,NULL);}
     else if(!StrCmp(Args,L"reset")) {gST->RuntimeServices->ResetSystem(EfiResetWarm,EFI_SUCCESS,0,NULL);}
     else {CPrint(Error,L"Unknown parameter : %s",Args);return EFI_INVALID_PARAMETER;}
@@ -44,6 +44,7 @@ EFI_STATUS CMDhelp(CHAR16* Args){
 
 EFI_STATUS CMDclear(CHAR16* Args){
     uefi_call_wrapper(gST->ConOut->ClearScreen,1,gST->ConOut);
+    return EFI_SUCCESS;
 }
 
 EFI_STATUS CMDexit(CHAR16* Args){
@@ -72,6 +73,8 @@ EFI_STATUS CMDls(CHAR16 *Args)
         }
 
     }
+    FreePool(buffer);
+    return EFI_SUCCESS;
 }
 
 void UpdateDir(CHAR16* Path){
@@ -102,7 +105,10 @@ void UpdateDir(CHAR16* Path){
 
 EFI_STATUS CMDcd(CHAR16 *Args)
 {
-    
+    if(!Args){
+        CPrint(Info,L"Usage : cd <folder>\n");
+        return EFI_INVALID_PARAMETER;
+    }
     EFI_FILE_PROTOCOL *temp;
     EFI_STATUS status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ,0);
     if(status == EFI_NOT_FOUND){
@@ -125,6 +131,7 @@ EFI_STATUS CMDcd(CHAR16 *Args)
             return EFI_NOT_FOUND;
         }
     }
+    return status;
 }
 
 EFI_STATUS CMDpwd(CHAR16 *Args){

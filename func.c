@@ -1,8 +1,7 @@
 #include "func.h"
 #include <efi.h>
 #include <efilib.h>
-extern EFI_SYSTEM_TABLE *ST;
-EFI_FILE_PROTOCOL *root;
+
 //Utilities 
 void CPrint(UINTN color, CONST CHAR16 *fmt, ...){
     va_list args;

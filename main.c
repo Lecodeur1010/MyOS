@@ -25,7 +25,7 @@ CHAR16* WaitForCommand(){
     CPrint(EFI_YELLOW,WorkingDir);
     CPrint(EFI_YELLOW,L">");
     while(1){
-        CHAR16 Key = WaitForInput(ST);
+        CHAR16 Key = WaitForInput();
 
         
         if(!Key)continue;
@@ -49,17 +49,22 @@ CHAR16* WaitForCommand(){
 }
 
 EFI_STATUS RunCMD(CHAR16* buffer){
+    UINTN Offset = 0;
+    while(buffer[Offset] == L' ')Offset++;
+    if(buffer[Offset]==L'\0') {
+        FreePool(buffer);
+        return EFI_SUCCESS;
+    }
     CHAR16* Args = NULL;        
-    for (UINTN i = 0; buffer[i] != L'\0'; i++) {
-        if (buffer[i] == L' ') {
-            buffer[i] = L'\0';
-            Args = &buffer[i + 1];
+    for (UINTN i = 0; buffer[i+Offset] != L'\0'; i++) {
+        if (buffer[i+Offset] == L' ') {
+            buffer[i+Offset] = L'\0';
+            Args = &buffer[i + 1 + Offset];
             break;
         }
     }
-    
     for(UINTN i = 0;i<CMD_COUNT;i++){
-        if(!StrCmp(buffer,Commands[i].name)){
+        if(!StrCmp(buffer+Offset,Commands[i].name)){
             Commands[i].func(Args);
             FreePool(buffer);
             return EFI_SUCCESS;
@@ -76,6 +81,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     uefi_call_wrapper(SystemTable->ConOut->ClearScreen,1,SystemTable->ConOut);    
     CPrint(Info,L"MyOS (Beta version)\n\"help\" for help\n");
     Init(ImageHandle);
-    while(1){RunCMD(WaitForCommand());}
+    while(1){
+        CHAR16* cmd = WaitForCommand();
+        if(cmd)
+            RunCMD(cmd);}
     return EFI_SUCCESS;
 }

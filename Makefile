@@ -28,8 +28,20 @@ cmd.o : cmd.c
 	-I /usr/include/efi \
 	-I /usr/include/efi/x86_64 \
 	-o cmd.o
-main.so : main.o func.o cmd.o
-	ld main.o func.o cmd.o                       \
+display.o : display.c
+	gcc display.c \
+	-c \
+	-fno-stack-protector \
+	-fpic \
+	-fshort-wchar \
+	-mno-red-zone \
+	-I /usr/include/efi \
+	-I /usr/include/efi/x86_64 \
+	-o display.o
+
+
+main.so : main.o func.o cmd.o  display.o
+	ld main.o func.o cmd.o  display.o                     \
         /usr/lib/crt0-efi-x86_64.o     \
         -nostdlib                      \
         -znocombreloc                  \
@@ -63,6 +75,7 @@ run : main.efi
 	qemu-system-x86_64 -cpu qemu64 \
         -drive if=pflash,format=raw,unit=0,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
         -drive format=raw,file=fat:rw:esp \
+		-drive format=raw,file=fat:rw:esp2 \
         -net none
 
 install:main.efi

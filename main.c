@@ -2,6 +2,7 @@
 #include <efilib.h>
 #include "func.h"
 #include "cmd.h"
+#include "display.h"
 
 CHAR16 WaitForInput()
 {
@@ -24,8 +25,10 @@ CHAR16* WaitForCommand(){
     CHAR16* buffer = AllocatePool(256*sizeof(CHAR16));
     uint8_t pos = 0;
     if(!buffer)return NULL;
-    CPrint(EFI_YELLOW,WorkingDir);
-    CPrint(EFI_YELLOW,L">");
+    void *prompt = GetPrompt();
+    CPrint(EFI_YELLOW,L"%s",prompt);
+    FreePool(prompt);
+
     while(1){
         CHAR16 Key = WaitForInput();
 
@@ -80,9 +83,11 @@ EFI_STATUS RunCMD(CHAR16* buffer){
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     InitializeLib(ImageHandle, SystemTable);
+    GopInit();
     uefi_call_wrapper(SystemTable->ConOut->ClearScreen,1,SystemTable->ConOut);    
     CPrint(Info,L"MyOS (Beta version)\n\"help\" for help\n");
     Init(ImageHandle);
+
     while(1){
         CHAR16* cmd = WaitForCommand();
         if(cmd)

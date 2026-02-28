@@ -1,8 +1,9 @@
 #include "func.h"
 #include <efi.h>
 #include <efilib.h>
+#include "display.h"
 
-//Utilities 
+
 void CPrint(UINTN color, CONST CHAR16 *fmt, ...){
     va_list args;
     CHAR16 buffer[256];
@@ -42,8 +43,9 @@ CHAR16 QwertyToAzerty(CHAR16 key)
     case L'*': keyO = L'8'; break;
     case L'(': keyO = L'9'; break;
     case L')': keyO = L'0'; break;
+    case L'.': keyO = L':'; break;
+    case L'<': keyO = L'.'; break;
     default: keyO = key; break;
     }
     return keyO;
 }
-

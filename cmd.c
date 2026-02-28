@@ -2,23 +2,32 @@
 #include "func.h"
 #include <efi.h>
 #include <efilib.h>
-
+#include <math.h>
 COMMAND Commands[] = {
     {L"help",CMDhelp,L"General help"},
     {L"power",CMDpower,L"Reboot or shutdown"},
     {L"time",CMDtime,L"Get date and time"},
     {L"clear",CMDclear,L"Clear the screen"},
     {L"exit",CMDexit,L"Exit"},
+    {L"exc",CMDexc,L"Cause an exception. debugging purpose, please not call"},
     {L"ls",CMDls,L"List directory content"},
     {L"dir",CMDls,L"Alias for ls"},
     {L"cd",CMDcd,L"Change working dir"},
     {L"pwd",CMDpwd,L"Print working dir"},
     {L"mkdir",CMDmkdir,L"Create directory"},
-    {L"rm",CMDrm,L"Remove file or directory"}
+    {L"rm",CMDrm,L"Remove file or directory"},
+    {L"map",CMDmap,L"Map volumes"},
+    {L"vol",CMDvol,L"Change working volume volumes"},
 };
 UINTN CMD_COUNT = sizeof(Commands) / sizeof(COMMAND);
 
-EFI_STATUS CMDpower(CHAR16* Args) {
+VOLUME *Volumes = NULL;
+UINTN VolumesCount = 0;
+
+
+
+
+EFI_STATUS CMDpower(CHAR16* Args){
     if (!Args || !StrCmp(Args,L"help") ){CPrint(Info,L"Usage : power off|reset\n");return EFI_INVALID_PARAMETER;}
     else if(!StrCmp(Args,L"off")) {uefi_call_wrapper(RT->ResetSystem,4,EfiResetShutdown,EFI_SUCCESS,0,NULL);}
     else if(!StrCmp(Args,L"reset")) {uefi_call_wrapper(RT->ResetSystem,4,EfiResetWarm,EFI_SUCCESS,0,NULL);}
@@ -26,6 +35,7 @@ EFI_STATUS CMDpower(CHAR16* Args) {
     return EFI_SUCCESS;
 
 }
+
 EFI_STATUS CMDtime(CHAR16* Args){
     EFI_TIME ActualTime;
     uefi_call_wrapper(gST->RuntimeServices->GetTime,2,&ActualTime,NULL);
@@ -37,6 +47,7 @@ EFI_STATUS CMDtime(CHAR16* Args){
         CPrint(Info,L"Timezone : UTC%+d:%02d",ActualTime.TimeZone/60,ActualTime.TimeZone < 0 ? -(ActualTime.TimeZone % 60) : ActualTime.TimeZone % 60);
     return EFI_SUCCESS;
 }
+
 EFI_STATUS CMDhelp(CHAR16* Args){
     for(uint8_t i = 0; i<CMD_COUNT;i++){
         CPrint(Info,L"%s - %s\n",Commands[i].name,Commands[i].description);
@@ -53,9 +64,50 @@ EFI_STATUS CMDexit(CHAR16* Args){
     Exit(EFI_SUCCESS,0,NULL);
 }
 
+EFI_STATUS CMDexc(CHAR16* Args) {
+    if (!Args || StrLen(Args) == 0) {
+        CPrint(Info, L"Usage : exc <vector> (0-31)\n");
+        return EFI_INVALID_PARAMETER;
+    }
+
+    // 1. Conversion simple String vers Uint8 (Atoui manuel)
+    UINTN vector = 0;
+    for (UINTN i = 0; Args[i] != L'\0'; i++) {
+        if (Args[i] < L'0' || Args[i] > L'9') {
+            CPrint(Error, L"Erreur : l'argument doit être un nombre.\n");
+            return EFI_INVALID_PARAMETER;
+        }
+        vector = vector * 10 + (Args[i] - L'0');
+    }
+
+    if (vector > 31) {
+        CPrint(Error, L"Erreur : vecteur hors limites (0-31).\n");
+        return EFI_INVALID_PARAMETER;
+    }
+
+
+    static uint8_t code[3];
+    code[0] = 0xCD;           // Opcode INT
+    code[1] = (uint8_t)vector; 
+    code[2] = 0xC3;           // Opcode RET
+
+    // 3. Appel
+    void (*dispatch)() = (void(*)())code;
+    dispatch();
+
+    return EFI_SUCCESS;
+}
+
 EFI_FILE_PROTOCOL *ActualDir;
 CHAR16* WorkingDir = NULL;
 UINTN WorkingDirSize;
+
+CHAR16* GetPrompt(){
+    CHAR16* Buffer = NULL;
+    Buffer = AllocatePool((WorkingDirSize+6)*sizeof(CHAR16));
+    UnicodeSPrint(Buffer,(WorkingDirSize + 6) * sizeof(CHAR16),L"fs%u:%s>",VolumesCount,WorkingDir);
+    return Buffer;
+}
 
 EFI_STATUS CMDls(CHAR16 *Args)
 {
@@ -193,6 +245,56 @@ EFI_STATUS CMDrm(CHAR16 *Args)
         }
         
     }
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS CMDmap(CHAR16 *Args){
+    EFI_HANDLE* HandleBuffer;
+    uefi_call_wrapper(BS->LocateHandleBuffer,5,ByProtocol,&gEfiSimpleFileSystemProtocolGuid,NULL,&VolumesCount,&HandleBuffer);
+    if(Volumes)FreePool(Volumes);
+    Volumes = AllocatePool(sizeof(VOLUME)*VolumesCount);
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs;
+    EFI_FILE_PROTOCOL *Root;
+    for(UINTN i = 0; i < VolumesCount; i++){
+        
+        uefi_call_wrapper(gBS->HandleProtocol, 3, HandleBuffer[i], &gEfiSimpleFileSystemProtocolGuid, (VOID*)&fs);
+        uefi_call_wrapper(fs->OpenVolume,2,fs, &Root);
+
+        Volumes[i].Handle = HandleBuffer[i];
+        Volumes[i].Root = Root;
+        UINTN Size;
+        uefi_call_wrapper(Root->GetInfo,4,Root,&gEfiFileSystemInfoGuid,&Size,NULL);
+        EFI_FILE_SYSTEM_INFO *info = AllocatePool(Size);
+        uefi_call_wrapper(Root->GetInfo,4,Root,&gEfiFileSystemInfoGuid,&Size,info);
+        StrCpy(Volumes[i].Label, info->VolumeLabel);
+        
+        FreePool(info);
+    }
+    for(UINTN i = 0; i < VolumesCount; i++)
+        CPrint(Info,L"fs%u: %s\n",i,Volumes->Label);
+
+}
+
+EFI_STATUS CMDvol(CHAR16* Args){
+    if (!Args){
+        CPrint(Info,L"Usage : vol <volume> (<volume> will always be fsX: format)\n");
+        return EFI_INVALID_PARAMETER;
+    }
+
+    uint8_t val=255 ; 
+    if(Args[2] >= L'0' && Args[2]  <= L'9')
+        val = Args[2]  - L'0'; 
+     
+
+    if (Args[0]!=L'f'||Args[1]!=L's'||val>=VolumesCount||Args[3]!=L':'){
+        CPrint(Error,L"Wrong volume identifier. Should be in fsX: format\n");
+        return EFI_INVALID_PARAMETER;
+    }
+
+    ActualDir=Volumes[val].Root;
+    WorkingDirSize = 1;
+    StrCpy(WorkingDir,L"\\");
+    VolumesCount=val;
     return EFI_SUCCESS;
 }
 

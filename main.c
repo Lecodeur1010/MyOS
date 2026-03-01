@@ -24,6 +24,7 @@ CHAR16 WaitForInput()
 CHAR16* WaitForCommand(){
     CHAR16* buffer = AllocatePool(256*sizeof(CHAR16));
     uint8_t pos = 0;
+    
     if(!buffer)return NULL;
     void *prompt = GetPrompt();
     CPrint(EFI_YELLOW,L"%s",prompt);

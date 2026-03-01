@@ -39,8 +39,7 @@ display.o : display.c
 	-I /usr/include/efi/x86_64 \
 	-o display.o
 
-
-main.so : main.o func.o cmd.o  display.o
+main.so : main.o func.o cmd.o  display.o 
 	ld main.o func.o cmd.o  display.o                     \
         /usr/lib/crt0-efi-x86_64.o     \
         -nostdlib                      \
@@ -52,6 +51,7 @@ main.so : main.o func.o cmd.o  display.o
         -l:libefi.a	\
 		-l:libgnuefi.a                    \
         -o main.so
+
 main.efi : main.so
 	objcopy -j .text                       \
         -j .sdata                      \
@@ -75,7 +75,7 @@ run : main.efi
 	qemu-system-x86_64 -cpu qemu64 \
         -drive if=pflash,format=raw,unit=0,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
         -drive format=raw,file=fat:rw:esp \
-		-drive format=raw,file=fat:rw:esp2 \
+		-drive format=raw,file=image.img \
         -net none
 
 install:main.efi

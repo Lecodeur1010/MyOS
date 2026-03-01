@@ -15,7 +15,8 @@ COMMAND Commands[] = {
     {L"cd",CMDcd,L"Change working dir"},
     {L"pwd",CMDpwd,L"Print working dir"},
     {L"mkdir",CMDmkdir,L"Create directory"},
-    {L"rm",CMDrm,L"Remove file or directory"},
+    {L"rm",CMDrm,L"Remove file or directory (if empty)"},
+    {L"cat",CMDcat,L"Print file's content"},
     {L"map",CMDmap,L"Map volumes"},
     {L"vol",CMDvol,L"Change working volume volumes"},
 };
@@ -23,7 +24,7 @@ UINTN CMD_COUNT = sizeof(Commands) / sizeof(COMMAND);
 
 VOLUME *Volumes = NULL;
 UINTN VolumesCount = 0;
-
+UINTN ActualVolume = 0;
 
 
 
@@ -105,7 +106,7 @@ UINTN WorkingDirSize;
 CHAR16* GetPrompt(){
     CHAR16* Buffer = NULL;
     Buffer = AllocatePool((WorkingDirSize+6)*sizeof(CHAR16));
-    UnicodeSPrint(Buffer,(WorkingDirSize + 6) * sizeof(CHAR16),L"fs%u:%s>",VolumesCount,WorkingDir);
+    UnicodeSPrint(Buffer,(WorkingDirSize + 6) * sizeof(CHAR16),L"fs%u:%s>",ActualVolume,WorkingDir);
     return Buffer;
 }
 
@@ -225,8 +226,8 @@ EFI_STATUS CMDmkdir(CHAR16 *Args){
     return EFI_SUCCESS;
 }
 
-EFI_STATUS CMDrm(CHAR16 *Args)
-{
+EFI_STATUS CMDrm(CHAR16 *Args){
+
     if(!Args){
         CPrint(Info,L"Usage : rm <file/folder>\n");
         return EFI_INVALID_PARAMETER;
@@ -248,6 +249,62 @@ EFI_STATUS CMDrm(CHAR16 *Args)
     return EFI_SUCCESS;
 }
 
+EFI_STATUS CMDcat(CHAR16 *Args) {
+    if (!Args) {
+        Print(L"Usage: cat <filename>\n");
+        return EFI_INVALID_PARAMETER;
+    }
+
+    EFI_FILE_PROTOCOL *File = NULL;
+    EFI_STATUS Status;
+
+    Status = uefi_call_wrapper(ActualDir->Open, 5, ActualDir, &File, Args, EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR(Status)) {
+        CPrint(Error,L"Error: Could not open file %s (%r)\n", Args, Status);
+        return Status;
+    }
+    UINTN InfoSize = 0;
+    EFI_FILE_INFO *FileInfo = NULL;
+    uefi_call_wrapper(File->GetInfo, 4, File, &gEfiFileInfoGuid, &InfoSize, NULL);
+    FileInfo = AllocatePool(InfoSize);
+    Status = uefi_call_wrapper(File->GetInfo, 4, File, &gEfiFileInfoGuid, &InfoSize, FileInfo);
+    if (EFI_ERROR(Status)) {
+        Print(L"Error: Could not get file info\n");
+        FreePool(FileInfo);
+        uefi_call_wrapper(File->Close, 1, File);
+        return Status;
+    }
+
+    if (FileInfo->Attribute & EFI_FILE_DIRECTORY) {
+        Print(L"Error: %s is a directory\n", Args);
+        FreePool(FileInfo);
+        uefi_call_wrapper(File->Close, 1, File);
+        return EFI_UNSUPPORTED;
+    }
+
+    UINTN FileSize = FileInfo->FileSize;
+    FreePool(FileInfo);
+
+    CHAR8* RawBuffer = AllocatePool(FileSize);
+    Status = uefi_call_wrapper(File->Read, 3, File, &FileSize, RawBuffer);
+
+    if (!EFI_ERROR(Status)) {
+        CHAR16* WideBuffer = AllocateZeroPool((FileSize + 1) * sizeof(CHAR16));
+        
+        for (UINTN i = 0; i < FileSize; i++) {
+            WideBuffer[i] = (CHAR16)RawBuffer[i];
+        }
+
+        Print(L"%s\n", WideBuffer);
+        FreePool(WideBuffer);
+    }
+
+    FreePool(RawBuffer);
+    uefi_call_wrapper(File->Close, 1, File);
+
+    return Status;
+}
+
 EFI_STATUS CMDmap(CHAR16 *Args){
     EFI_HANDLE* HandleBuffer;
     uefi_call_wrapper(BS->LocateHandleBuffer,5,ByProtocol,&gEfiSimpleFileSystemProtocolGuid,NULL,&VolumesCount,&HandleBuffer);
@@ -262,7 +319,7 @@ EFI_STATUS CMDmap(CHAR16 *Args){
 
         Volumes[i].Handle = HandleBuffer[i];
         Volumes[i].Root = Root;
-        UINTN Size;
+        UINTN Size = 1;
         uefi_call_wrapper(Root->GetInfo,4,Root,&gEfiFileSystemInfoGuid,&Size,NULL);
         EFI_FILE_SYSTEM_INFO *info = AllocatePool(Size);
         uefi_call_wrapper(Root->GetInfo,4,Root,&gEfiFileSystemInfoGuid,&Size,info);
@@ -271,7 +328,7 @@ EFI_STATUS CMDmap(CHAR16 *Args){
         FreePool(info);
     }
     for(UINTN i = 0; i < VolumesCount; i++)
-        CPrint(Info,L"fs%u: %s\n",i,Volumes->Label);
+        CPrint(Info,L"fs%u: %s\n",i,Volumes[i].Label);
 
 }
 
@@ -294,7 +351,7 @@ EFI_STATUS CMDvol(CHAR16* Args){
     ActualDir=Volumes[val].Root;
     WorkingDirSize = 1;
     StrCpy(WorkingDir,L"\\");
-    VolumesCount=val;
+    ActualVolume=val;
     return EFI_SUCCESS;
 }
 

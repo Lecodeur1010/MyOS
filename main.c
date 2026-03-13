@@ -16,7 +16,7 @@ CHAR16 WaitForInput()
     if(EFI_ERROR(status)){
         return 0;
     }
-    // Convert QWERTY to AZERTY; comment line 19 and uncomment line 20 to disable this feature
+    // Convert QWERTY to AZERTY; comment line 20 and uncomment line 21 to disable this feature
     return QwertyToAzerty(Key.UnicodeChar);
     //return Key.UnicodeChar;
 }
@@ -37,16 +37,16 @@ CHAR16* WaitForCommand(){
         if(!Key)continue;
         if(Key == L'\b' && pos>0){
             pos--;
-            CPrint(Info,L"\b \b");
+            CPrint(THEME_INFO,L"\b \b");
         }
         else if(Key == L'\r' || Key == L'\n'){
             buffer[pos]=L'\0';
-            CPrint(Info,L"\r\n");
+            CPrint(THEME_INFO,L"\r\n");
             return buffer;           
         }
         else if (pos < 255 && Key >= ' '){
             buffer[pos++]=Key;
-            CPrint(Info,L"%c",Key);
+            CPrint(THEME_INFO,L"%c",Key);
 
         }
         
@@ -76,7 +76,7 @@ EFI_STATUS RunCMD(CHAR16* buffer){
             return EFI_SUCCESS;
         }
     }
-    CPrint(Error,L"Error : CMD \"%s\" not recognized\n",buffer);
+    CPrint(THEME_ERROR,L"Error : CMD \"%s\" not recognized\n",buffer);
     FreePool(buffer);
     return EFI_NOT_FOUND;
 
@@ -86,7 +86,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     InitializeLib(ImageHandle, SystemTable);
     GopInit();
     uefi_call_wrapper(SystemTable->ConOut->ClearScreen,1,SystemTable->ConOut);    
-    CPrint(Info,L"MyOS (Beta version)\n\"help\" for help\n");
+    CPrint(THEME_INFO,L"TomatOS (Beta version)\n\"help\" for help\n");
     Init(ImageHandle);
 
     while(1){

@@ -1,5 +1,6 @@
 #include "cmd.h"
 #include "func.h"
+#include "display.h"
 #include <efi.h>
 #include <efilib.h>
 #include <math.h>
@@ -29,10 +30,10 @@ UINTN ActualVolume = 0;
 
 
 EFI_STATUS CMDpower(CHAR16* Args){
-    if (!Args || !StrCmp(Args,L"help") ){CPrint(Info,L"Usage : power off|reset\n");return EFI_INVALID_PARAMETER;}
+    if (!Args || !StrCmp(Args,L"help") ){CPrint(THEME_INFO,L"Usage : power off|reset\n");return EFI_INVALID_PARAMETER;}
     else if(!StrCmp(Args,L"off")) {uefi_call_wrapper(RT->ResetSystem,4,EfiResetShutdown,EFI_SUCCESS,0,NULL);}
     else if(!StrCmp(Args,L"reset")) {uefi_call_wrapper(RT->ResetSystem,4,EfiResetWarm,EFI_SUCCESS,0,NULL);}
-    else {CPrint(Error,L"Unknown parameter : %s",Args);return EFI_INVALID_PARAMETER;}
+    else {CPrint(THEME_ERROR,L"Unknown parameter : %s",Args);return EFI_INVALID_PARAMETER;}
     return EFI_SUCCESS;
 
 }
@@ -40,18 +41,18 @@ EFI_STATUS CMDpower(CHAR16* Args){
 EFI_STATUS CMDtime(CHAR16* Args){
     EFI_TIME ActualTime;
     uefi_call_wrapper(gST->RuntimeServices->GetTime,2,&ActualTime,NULL);
-    CPrint(Info,L"Date : %u/%u/%u \n",ActualTime.Year,ActualTime.Month,ActualTime.Day);
-    CPrint(Info,L"Time : %02u:%02u:%02u\n",ActualTime.Hour,ActualTime.Minute,ActualTime.Second);
+    CPrint(THEME_INFO,L"Date : %u/%u/%u \n",ActualTime.Year,ActualTime.Month,ActualTime.Day);
+    CPrint(THEME_INFO,L"Time : %02u:%02u:%02u\n",ActualTime.Hour,ActualTime.Minute,ActualTime.Second);
     if(ActualTime.TimeZone == EFI_UNSPECIFIED_TIMEZONE)
-        CPrint(Info,L"Timezone unspecified\n");
+        CPrint(THEME_INFO,L"Timezone unspecified\n");
     else
-        CPrint(Info,L"Timezone : UTC%+d:%02d",ActualTime.TimeZone/60,ActualTime.TimeZone < 0 ? -(ActualTime.TimeZone % 60) : ActualTime.TimeZone % 60);
+        CPrint(THEME_INFO,L"Timezone : UTC%+d:%02d",ActualTime.TimeZone/60,ActualTime.TimeZone < 0 ? -(ActualTime.TimeZone % 60) : ActualTime.TimeZone % 60);
     return EFI_SUCCESS;
 }
 
 EFI_STATUS CMDhelp(CHAR16* Args){
     for(uint8_t i = 0; i<CMD_COUNT;i++){
-        CPrint(Info,L"%s - %s\n",Commands[i].name,Commands[i].description);
+        CPrint(THEME_INFO,L"%s - %s\n",Commands[i].name,Commands[i].description);
     }
     return EFI_SUCCESS;
 }
@@ -67,7 +68,7 @@ EFI_STATUS CMDexit(CHAR16* Args){
 
 EFI_STATUS CMDexc(CHAR16* Args) {
     if (!Args || StrLen(Args) == 0) {
-        CPrint(Info, L"Usage : exc <vector> (0-31)\n");
+        CPrint(THEME_INFO, L"Usage : exc <vector> (0-31)\n");
         return EFI_INVALID_PARAMETER;
     }
 
@@ -75,14 +76,14 @@ EFI_STATUS CMDexc(CHAR16* Args) {
     UINTN vector = 0;
     for (UINTN i = 0; Args[i] != L'\0'; i++) {
         if (Args[i] < L'0' || Args[i] > L'9') {
-            CPrint(Error, L"Erreur : l'argument doit être un nombre.\n");
+            CPrint(THEME_ERROR, L"Erreur : l'argument doit être un nombre.\n");
             return EFI_INVALID_PARAMETER;
         }
         vector = vector * 10 + (Args[i] - L'0');
     }
 
     if (vector > 31) {
-        CPrint(Error, L"Erreur : vecteur hors limites (0-31).\n");
+        CPrint(THEME_ERROR, L"Erreur : vecteur hors limites (0-31).\n");
         return EFI_INVALID_PARAMETER;
     }
 
@@ -124,7 +125,7 @@ EFI_STATUS CMDls(CHAR16 *Args)
         if(info->Attribute & EFI_FILE_DIRECTORY){
             CPrint(EFI_LIGHTBLUE,L"%s    ",name);
         } else {
-            CPrint(Warning,L"%s    ",name);
+            CPrint(THEME_WARNING,L"%s    ",name);
         }
 
     }
@@ -147,7 +148,7 @@ void UpdateDir(CHAR16* Path){
     else {
         UINTN newSize = (WorkingDirSize + StrLen(Path) + 2) * sizeof(CHAR16);
         CHAR16 *temp = AllocatePool(newSize);
-        if(!temp) { CPrint(Error,L"Allocation error\n"); Exit(EFI_ABORTED,0,NULL);}
+        if(!temp) { CPrint(THEME_ERROR,L"Allocation error\n"); Exit(EFI_ABORTED,0,NULL);}
         StrCpy(temp, WorkingDir);
         if(WorkingDir[WorkingDirSize-1] != L'\\') StrCat(temp, L"\\");
         StrCat(temp, Path);
@@ -161,13 +162,13 @@ void UpdateDir(CHAR16* Path){
 EFI_STATUS CMDcd(CHAR16 *Args)
 {
     if(!Args){
-        CPrint(Info,L"Usage : cd <folder>\n");
+        CPrint(THEME_INFO,L"Usage : cd <folder>\n");
         return EFI_INVALID_PARAMETER;
     }
     EFI_FILE_PROTOCOL *temp;
     EFI_STATUS status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ,0);
     if(status == EFI_NOT_FOUND){
-        CPrint(Error,L"Folder %s not found\n",Args);
+        CPrint(THEME_ERROR,L"Folder %s not found\n",Args);
         return status;
     }
     if(status == EFI_SUCCESS){
@@ -189,7 +190,7 @@ EFI_STATUS CMDcd(CHAR16 *Args)
             if(*Args!=L'\\')UpdateDir(Args);
             FreePool(FileInfo);
         } else {
-            CPrint(Error,L"Folder %s not found\n",Args);
+            CPrint(THEME_ERROR,L"Folder %s not found\n",Args);
             FreePool(FileInfo);
             temp->Close(temp);
             return EFI_NOT_FOUND;
@@ -199,26 +200,26 @@ EFI_STATUS CMDcd(CHAR16 *Args)
 }
 
 EFI_STATUS CMDpwd(CHAR16 *Args){
-    CPrint(Info,L"%s\n",WorkingDir);
+    CPrint(THEME_INFO,L"%s\n",WorkingDir);
     return EFI_SUCCESS;
 }
 
 EFI_STATUS CMDmkdir(CHAR16 *Args){
     if(!Args){
-        CPrint(Info,L"Usage : mkdir <folder>\n");
+        CPrint(THEME_INFO,L"Usage : mkdir <folder>\n");
         return EFI_INVALID_PARAMETER;
     }
     EFI_FILE_PROTOCOL *temp;
     EFI_STATUS status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ,0);
     if(status == EFI_SUCCESS){
-        CPrint(Warning,L"%s already exist \n",Args);
+        CPrint(THEME_WARNING,L"%s already exist \n",Args);
         uefi_call_wrapper(temp->Close,1,temp);
         return EFI_ABORTED;
     }
     else if(status==EFI_NOT_FOUND){
         status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,EFI_FILE_DIRECTORY);
         if(EFI_ERROR(status))return status;
-        CPrint(Info,L"%s created successfuly !\n",Args);
+        CPrint(THEME_INFO,L"%s created successfuly !\n",Args);
         uefi_call_wrapper(temp->Close,1,temp);
         
     }else Print(L"Error : %u",status);
@@ -229,19 +230,19 @@ EFI_STATUS CMDmkdir(CHAR16 *Args){
 EFI_STATUS CMDrm(CHAR16 *Args){
 
     if(!Args){
-        CPrint(Info,L"Usage : rm <file/folder>\n");
+        CPrint(THEME_INFO,L"Usage : rm <file/folder>\n");
         return EFI_INVALID_PARAMETER;
     }
     EFI_FILE_PROTOCOL *temp;
     EFI_STATUS status = uefi_call_wrapper(ActualDir->Open,5,ActualDir,&temp,Args,EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,0);
     if(status == EFI_NOT_FOUND){
-        CPrint(Error,L"%s not found\n",Args);
+        CPrint(THEME_ERROR,L"%s not found\n",Args);
         return status;
     }
     if(status == EFI_SUCCESS){
         status = uefi_call_wrapper(temp->Delete,1,temp);
         if(status == EFI_WARN_DELETE_FAILURE){
-            CPrint(Warning,L"Failed to delete %s\n",Args);
+            CPrint(THEME_WARNING,L"Failed to delete %s\n",Args);
             return status;
         }
         
@@ -260,7 +261,7 @@ EFI_STATUS CMDcat(CHAR16 *Args) {
 
     Status = uefi_call_wrapper(ActualDir->Open, 5, ActualDir, &File, Args, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(Status)) {
-        CPrint(Error,L"Error: Could not open file %s (%r)\n", Args, Status);
+        CPrint(THEME_ERROR,L"Error: Could not open file %s (%r)\n", Args, Status);
         return Status;
     }
     UINTN InfoSize = 0;
@@ -269,14 +270,14 @@ EFI_STATUS CMDcat(CHAR16 *Args) {
     FileInfo = AllocatePool(InfoSize);
     Status = uefi_call_wrapper(File->GetInfo, 4, File, &gEfiFileInfoGuid, &InfoSize, FileInfo);
     if (EFI_ERROR(Status)) {
-        Print(L"Error: Could not get file info\n");
+        CPrint(THEME_ERROR,L"Error: Could not get file info\n");
         FreePool(FileInfo);
         uefi_call_wrapper(File->Close, 1, File);
         return Status;
     }
 
     if (FileInfo->Attribute & EFI_FILE_DIRECTORY) {
-        Print(L"Error: %s is a directory\n", Args);
+        CPrint(THEME_ERROR,L"Error: %s is a directory\n", Args);
         FreePool(FileInfo);
         uefi_call_wrapper(File->Close, 1, File);
         return EFI_UNSUPPORTED;
@@ -328,13 +329,13 @@ EFI_STATUS CMDmap(CHAR16 *Args){
         FreePool(info);
     }
     for(UINTN i = 0; i < VolumesCount; i++)
-        CPrint(Info,L"fs%u: %s\n",i,Volumes[i].Label);
+        CPrint(THEME_INFO,L"fs%u: %s\n",i,Volumes[i].Label);
 
 }
 
 EFI_STATUS CMDvol(CHAR16* Args){
     if (!Args){
-        CPrint(Info,L"Usage : vol <volume> (<volume> will always be fsX: format)\n");
+        CPrint(THEME_INFO,L"Usage : vol <volume> (<volume> will always be fsX: format)\n");
         return EFI_INVALID_PARAMETER;
     }
 
@@ -344,7 +345,7 @@ EFI_STATUS CMDvol(CHAR16* Args){
      
 
     if (Args[0]!=L'f'||Args[1]!=L's'||val>=VolumesCount||Args[3]!=L':'){
-        CPrint(Error,L"Wrong volume identifier. Should be in fsX: format\n");
+        CPrint(THEME_ERROR,L"Wrong volume identifier. Should be in fsX: format\n");
         return EFI_INVALID_PARAMETER;
     }
 

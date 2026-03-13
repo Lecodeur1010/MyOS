@@ -1,6 +1,7 @@
 #include "display.h"
 #include <efi.h>
 #include <efilib.h>
+#include "func.h"
 
 EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* GopInfo = NULL;
 EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
@@ -33,4 +34,16 @@ EFI_STATUS FillDisplay(UINT32 Color){
         }
     }
     return EFI_SUCCESS;
+}
+
+void CPrint(UINTN color, CONST CHAR16 *fmt, ...){
+    va_list args;
+    CHAR16 buffer[256];
+
+    va_start(args, fmt);    
+    UnicodeVSPrint(buffer, sizeof(buffer), fmt, args);
+    va_end(args);                            
+    uefi_call_wrapper(gST->ConOut->SetAttribute,2,gST->ConOut, color); 
+    uefi_call_wrapper(gST->ConOut->OutputString,2,gST->ConOut, buffer);
+    uefi_call_wrapper(gST->ConOut->SetAttribute,2,gST->ConOut, THEME_INFO);
 }

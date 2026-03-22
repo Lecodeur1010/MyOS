@@ -22,13 +22,13 @@ CHAR16 WaitForInput()
 }
 
 CHAR16* WaitForCommand(){
-    CHAR16* buffer = AllocatePool(256*sizeof(CHAR16));
+    CHAR16* buffer = kmalloc(256*sizeof(CHAR16));
     uint8_t pos = 0;
     
     if(!buffer)return NULL;
     void *prompt = GetPrompt();
-    CPrint(EFI_YELLOW,L"%s",prompt);
-    FreePool(prompt);
+    CPrint(THEME_PROMPT,prompt);
+    kfree(prompt);
 
     while(1){
         CHAR16 Key = WaitForInput();
@@ -58,7 +58,7 @@ EFI_STATUS RunCMD(CHAR16* buffer){
     UINTN Offset = 0;
     while(buffer[Offset] == L' ')Offset++;
     if(buffer[Offset]==L'\0') {
-        FreePool(buffer);
+        kfree(buffer);
         return EFI_SUCCESS;
     }
     CHAR16* Args = NULL;        
@@ -72,21 +72,24 @@ EFI_STATUS RunCMD(CHAR16* buffer){
     for(UINTN i = 0;i<CMD_COUNT;i++){
         if(!StrCmp(buffer+Offset,Commands[i].name)){
             Commands[i].func(Args);
-            FreePool(buffer);
+            kfree(buffer);
             return EFI_SUCCESS;
         }
     }
     CPrint(THEME_ERROR,L"Error : CMD \"%s\" not recognized\n",buffer);
-    FreePool(buffer);
+    kfree(buffer);
     return EFI_NOT_FOUND;
 
 }
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
+    
     InitializeLib(ImageHandle, SystemTable);
-    GopInit();
-    uefi_call_wrapper(SystemTable->ConOut->ClearScreen,1,SystemTable->ConOut);    
-    CPrint(THEME_INFO,L"TomatOS (Beta version)\n\"help\" for help\n");
+    EFI_STATUS status = GopInit();
+    if (EFI_ERROR(status)) return status;
+    FillDisplay(RGB(0,0,0));
+
+
     Init(ImageHandle);
 
     while(1){

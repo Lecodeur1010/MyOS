@@ -37,5 +37,9 @@ EFI_STATUS CMDrm(CHAR16* Args);
 EFI_STATUS CMDcat(CHAR16* Args);
 EFI_STATUS CMDmap(CHAR16* Args);
 EFI_STATUS CMDvol(CHAR16* Args);
+EFI_STATUS CMDtest(CHAR16* Args);
+EFI_STATUS CMDconfig(CHAR16* Args);
+EFI_STATUS CMDlistres(CHAR16* Args);
+EFI_STATUS CMDsetres(CHAR16* Args);
 void Init(EFI_HANDLE ImageHandle);
 #endif

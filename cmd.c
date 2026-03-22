@@ -20,7 +20,12 @@ COMMAND Commands[] = {
     {L"cat",CMDcat,L"Print file's content"},
     {L"map",CMDmap,L"Map volumes"},
     {L"vol",CMDvol,L"Change working volume volumes"},
+    {L"test",CMDtest,L"Test the screen"},
+    {L"config",CMDconfig,L"Get current screen configuration"},
+    {L"listres",CMDlistres,L"Get resolution list"},
+    {L"setres",CMDsetres,L"Set resolution based on a mode ID"}
 };
+
 UINTN CMD_COUNT = sizeof(Commands) / sizeof(COMMAND);
 
 VOLUME *Volumes = NULL;
@@ -51,14 +56,26 @@ EFI_STATUS CMDtime(CHAR16* Args){
 }
 
 EFI_STATUS CMDhelp(CHAR16* Args){
-    for(uint8_t i = 0; i<CMD_COUNT;i++){
-        CPrint(THEME_INFO,L"%s - %s\n",Commands[i].name,Commands[i].description);
+    UINTN size = 0;
+    for (UINTN i = 0; i < CMD_COUNT; i++) {
+        size += (StrLen(Commands[i].name) + StrLen(Commands[i].description) + 4) * sizeof(CHAR16);
     }
+    CHAR16* buffer = kmalloc(size);
+    if (buffer == NULL) {
+        return EFI_OUT_OF_RESOURCES;
+    }
+    UINTN index = 0;
+    for (UINTN i = 0; i < CMD_COUNT; i++) {
+        index += UnicodeSPrint(buffer + index, size - index, L"%s - %s\n", Commands[i].name, Commands[i].description);
+    }
+    CPrint(THEME_INFO,buffer);
+    kfree(buffer);
     return EFI_SUCCESS;
 }
 
 EFI_STATUS CMDclear(CHAR16* Args){
-    uefi_call_wrapper(gST->ConOut->ClearScreen,1,gST->ConOut);
+    FillDisplay(0);
+    SetCursor(0,0);
     return EFI_SUCCESS;
 }
 
@@ -106,7 +123,7 @@ UINTN WorkingDirSize;
 
 CHAR16* GetPrompt(){
     CHAR16* Buffer = NULL;
-    Buffer = AllocatePool((WorkingDirSize+6)*sizeof(CHAR16));
+    Buffer = kmalloc((WorkingDirSize+6)*sizeof(CHAR16));
     UnicodeSPrint(Buffer,(WorkingDirSize + 6) * sizeof(CHAR16),L"fs%u:%s>",ActualVolume,WorkingDir);
     return Buffer;
 }
@@ -115,21 +132,22 @@ EFI_STATUS CMDls(CHAR16 *Args)
 {
     uefi_call_wrapper(ActualDir->SetPosition,2,ActualDir,0);
     UINTN Size = 1024;
-    void* buffer = AllocatePool(Size);
+    void* buffer = kmalloc(Size);
     while(1){
         Size = 1024;
         uefi_call_wrapper(ActualDir->Read,3,ActualDir,&Size,buffer);
-        if(Size==0){Print(L"\n");return EFI_SUCCESS;} 
+        if(Size==0){break;} 
         EFI_FILE_INFO *info = (EFI_FILE_INFO*)buffer;
         CHAR16* name = info->FileName;
         if(info->Attribute & EFI_FILE_DIRECTORY){
-            CPrint(EFI_LIGHTBLUE,L"%s    ",name);
+            CPrint(THEME_FILE_FILE,L"%s    ",name);
         } else {
-            CPrint(THEME_WARNING,L"%s    ",name);
+            CPrint(THEME_FILE_FOLDER,L"%s    ",name);
         }
 
     }
-    FreePool(buffer);
+    CPrint(THEME_INFO,L"\n");
+    kfree(buffer);
     return EFI_SUCCESS;
 }
 
@@ -147,13 +165,13 @@ void UpdateDir(CHAR16* Path){
     }
     else {
         UINTN newSize = (WorkingDirSize + StrLen(Path) + 2) * sizeof(CHAR16);
-        CHAR16 *temp = AllocatePool(newSize);
+        CHAR16 *temp = kmalloc(newSize);
         if(!temp) { CPrint(THEME_ERROR,L"Allocation error\n"); Exit(EFI_ABORTED,0,NULL);}
         StrCpy(temp, WorkingDir);
         if(WorkingDir[WorkingDirSize-1] != L'\\') StrCat(temp, L"\\");
         StrCat(temp, Path);
 
-        FreePool(WorkingDir);
+        kfree(WorkingDir);
         WorkingDir = temp;
         WorkingDirSize = StrLen(WorkingDir);
     }
@@ -173,25 +191,24 @@ EFI_STATUS CMDcd(CHAR16 *Args)
     }
     if(status == EFI_SUCCESS){
         UINTN BufferSize = 1024;
-        EFI_FILE_INFO *FileInfo;
-        uefi_call_wrapper(gBS->AllocatePool,3,EfiLoaderData,BufferSize,(VOID**)&FileInfo);
+        EFI_FILE_INFO *FileInfo = (EFI_FILE_INFO*)kmalloc(BufferSize);
         uefi_call_wrapper(temp->GetInfo,4,temp,&gEfiFileInfoGuid,&BufferSize,FileInfo);
         if (FileInfo->Attribute & EFI_FILE_DIRECTORY) {
             if(*Args==L'\\'){
-                void* newDir = AllocatePool(sizeof(CHAR16)*(StrLen(Args)+1));
+                void* newDir = kmalloc(sizeof(CHAR16)*(StrLen(Args)+1));
                 if(!newDir)return EFI_ABORTED;
                 StrCpy(newDir,Args);
-                FreePool(WorkingDir);
+                kfree(WorkingDir);
                 WorkingDir = newDir;
                 WorkingDirSize = StrLen(newDir);
             }
             uefi_call_wrapper(ActualDir->Close, 1, ActualDir);
             ActualDir = temp;
             if(*Args!=L'\\')UpdateDir(Args);
-            FreePool(FileInfo);
+            kfree(FileInfo);
         } else {
             CPrint(THEME_ERROR,L"Folder %s not found\n",Args);
-            FreePool(FileInfo);
+            kfree(FileInfo);
             temp->Close(temp);
             return EFI_NOT_FOUND;
         }
@@ -267,26 +284,26 @@ EFI_STATUS CMDcat(CHAR16 *Args) {
     UINTN InfoSize = 0;
     EFI_FILE_INFO *FileInfo = NULL;
     uefi_call_wrapper(File->GetInfo, 4, File, &gEfiFileInfoGuid, &InfoSize, NULL);
-    FileInfo = AllocatePool(InfoSize);
+    FileInfo = kmalloc(InfoSize);
     Status = uefi_call_wrapper(File->GetInfo, 4, File, &gEfiFileInfoGuid, &InfoSize, FileInfo);
     if (EFI_ERROR(Status)) {
         CPrint(THEME_ERROR,L"Error: Could not get file info\n");
-        FreePool(FileInfo);
+        kfree(FileInfo);
         uefi_call_wrapper(File->Close, 1, File);
         return Status;
     }
 
     if (FileInfo->Attribute & EFI_FILE_DIRECTORY) {
         CPrint(THEME_ERROR,L"Error: %s is a directory\n", Args);
-        FreePool(FileInfo);
+        kfree(FileInfo);
         uefi_call_wrapper(File->Close, 1, File);
         return EFI_UNSUPPORTED;
     }
 
     UINTN FileSize = FileInfo->FileSize;
-    FreePool(FileInfo);
+    kfree(FileInfo);
 
-    CHAR8* RawBuffer = AllocatePool(FileSize);
+    CHAR8* RawBuffer = kmalloc(FileSize);
     Status = uefi_call_wrapper(File->Read, 3, File, &FileSize, RawBuffer);
 
     if (!EFI_ERROR(Status)) {
@@ -296,11 +313,11 @@ EFI_STATUS CMDcat(CHAR16 *Args) {
             WideBuffer[i] = (CHAR16)RawBuffer[i];
         }
 
-        Print(L"%s\n", WideBuffer);
-        FreePool(WideBuffer);
+        CPrint(THEME_INFO,L"%s\n", WideBuffer);
+        kfree(WideBuffer);
     }
 
-    FreePool(RawBuffer);
+    kfree(RawBuffer);
     uefi_call_wrapper(File->Close, 1, File);
 
     return Status;
@@ -309,8 +326,8 @@ EFI_STATUS CMDcat(CHAR16 *Args) {
 EFI_STATUS CMDmap(CHAR16 *Args){
     EFI_HANDLE* HandleBuffer;
     uefi_call_wrapper(BS->LocateHandleBuffer,5,ByProtocol,&gEfiSimpleFileSystemProtocolGuid,NULL,&VolumesCount,&HandleBuffer);
-    if(Volumes)FreePool(Volumes);
-    Volumes = AllocatePool(sizeof(VOLUME)*VolumesCount);
+    if(Volumes)kfree(Volumes);
+    Volumes = kmalloc(sizeof(VOLUME)*VolumesCount);
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs;
     EFI_FILE_PROTOCOL *Root;
     for(UINTN i = 0; i < VolumesCount; i++){
@@ -322,11 +339,11 @@ EFI_STATUS CMDmap(CHAR16 *Args){
         Volumes[i].Root = Root;
         UINTN Size = 1;
         uefi_call_wrapper(Root->GetInfo,4,Root,&gEfiFileSystemInfoGuid,&Size,NULL);
-        EFI_FILE_SYSTEM_INFO *info = AllocatePool(Size);
+        EFI_FILE_SYSTEM_INFO *info = kmalloc(Size);
         uefi_call_wrapper(Root->GetInfo,4,Root,&gEfiFileSystemInfoGuid,&Size,info);
         StrCpy(Volumes[i].Label, info->VolumeLabel);
         
-        FreePool(info);
+        kfree(info);
     }
     for(UINTN i = 0; i < VolumesCount; i++)
         CPrint(THEME_INFO,L"fs%u: %s\n",i,Volumes[i].Label);
@@ -356,6 +373,59 @@ EFI_STATUS CMDvol(CHAR16* Args){
     return EFI_SUCCESS;
 }
 
+EFI_STATUS CMDtest(CHAR16* Args){
+    
+    CPrint(RGB(255,0,0),L"Red   : abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890□\n");
+    CPrint(RGB(0,255,0),L"Green : abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890□\n");
+    CPrint(RGB(0,0,255),L"Blue  : abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890□\n");
+}
+
+EFI_STATUS CMDconfig(CHAR16* Args){
+    CPrint(THEME_INFO,L"Horizontal resolution : %u\n",GopInfo->HorizontalResolution);
+    CPrint(THEME_INFO,L"Vertical resolution   : %u\n",GopInfo->VerticalResolution);
+    CPrint(THEME_INFO,L"Scanline size         : %u\n",GopInfo->PixelsPerScanLine);
+}
+
+UINTN ModeCount=(UINTN)(-1);
+
+EFI_STATUS CMDlistres(CHAR16* Args){
+    GopModeList* liste = GetModeList(&ModeCount);
+    for(UINTN i = 0; i<ModeCount; i++){
+        if (liste[i].SizeX==(UINTN)(-1)){
+            CPrint(THEME_WARNING,L"Mode %u not available\n");
+            continue;
+        }
+        CPrint(THEME_INFO,L"Mode %u : %ux%u\n",i,liste[i].SizeX,liste[i].SizeY);
+    }
+    kfree(liste);
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS CMDsetres(CHAR16* Args){
+    if(ModeCount==(UINTN)(-1)){
+        CPrint(THEME_WARNING,L"Resolution not enumerated - please use reslist\n");
+        return EFI_NOT_READY;
+    }
+    UINTN ID = 0;
+    while (*Args != L'\0') {
+        if (*Args < L'0' || *Args > L'9') {
+            CPrint(THEME_WARNING,L"usage : setres <ID> (ID is always an integrer)\n");
+            return EFI_INVALID_PARAMETER;
+        }
+        ID = ID * 10 + (*Args - L'0');  // Conversion en entier
+        Args++;
+    }
+    if(ID>=ModeCount){
+        CPrint(THEME_WARNING,L"Resolution ID out of bound\n");
+        return EFI_INVALID_PARAMETER;
+    }
+    EFI_STATUS status = SetMode(ID);
+    if(EFI_ERROR(status)) CPrint(THEME_ERROR,L"Error : %r\n",status);
+    else CPrint(THEME_INFO,L"Mode %u set successfuly !\n",ID);
+    return status;
+    
+}
+
 void Init(EFI_HANDLE ImageHandle){
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs;
     EFI_LOADED_IMAGE_PROTOCOL *LoadedImage;
@@ -363,6 +433,6 @@ void Init(EFI_HANDLE ImageHandle){
     uefi_call_wrapper(gBS->HandleProtocol,3,LoadedImage->DeviceHandle,&gEfiSimpleFileSystemProtocolGuid,(VOID**)&fs);
     uefi_call_wrapper(fs->OpenVolume,2,fs, &ActualDir);
     WorkingDirSize = 1;
-    WorkingDir = AllocatePool((WorkingDirSize+1)*sizeof(CHAR16));
+    WorkingDir = kmalloc((WorkingDirSize+1)*sizeof(CHAR16));
     StrCpy(WorkingDir, L"\\");
 }

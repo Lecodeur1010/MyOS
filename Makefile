@@ -76,7 +76,8 @@ run : main.efi
         -drive if=pflash,format=raw,unit=0,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
         -drive format=raw,file=fat:rw:esp \
 		-drive format=raw,file=image.img \
-        -net none
+        -net none \
+		-display gtk,zoom-to-fit=on\
 
 install:main.efi
 	@read -p "Disque" dev; \

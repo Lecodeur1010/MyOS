@@ -35,3 +35,14 @@ CHAR16 QwertyToAzerty(CHAR16 key){
     }
     return keyO;
 }
+
+void* kmalloc(UINTN Size){
+    return AllocatePool(Size);
+}
+
+void kfree(void* pointer){
+    FreePool(pointer);
+}
+
+
+

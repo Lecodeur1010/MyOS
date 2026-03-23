@@ -55,23 +55,38 @@ CHAR16* WaitForCommand(){
 }
 
 EFI_STATUS RunCMD(CHAR16* buffer){
-    UINTN Offset = 0;
-    while(buffer[Offset] == L' ')Offset++;
-    if(buffer[Offset]==L'\0') {
+    CHAR16* OffsetedBuffer = buffer;
+    while(*OffsetedBuffer == L' ')OffsetedBuffer++;
+    if(*OffsetedBuffer==L'\0') {
         kfree(buffer);
         return EFI_SUCCESS;
     }
-    CHAR16* Args = NULL;        
-    for (UINTN i = 0; buffer[i+Offset] != L'\0'; i++) {
-        if (buffer[i+Offset] == L' ') {
-            buffer[i+Offset] = L'\0';
-            Args = &buffer[i + 1 + Offset];
-            break;
+    UINTN ArgCount = 1;
+    for(UINTN i = 1;OffsetedBuffer[i]!=L'\0';i++){//We skip the first char because it's from the name of the command
+        if(OffsetedBuffer[i]==L' ' && OffsetedBuffer[i-1]!=L' '){
+            while(OffsetedBuffer[i]==L' ')i++;
+            if(OffsetedBuffer[i]==L'\0')break;
+            ArgCount++;
         }
     }
+    CHAR16* argv[ArgCount];
+    argv[0] = OffsetedBuffer;
+    UINTN j = 1;
+
+    for (UINTN i = 1; OffsetedBuffer[i] != L'\0'; i++) {
+        if (j == ArgCount) break;
+        if (OffsetedBuffer[i] == L' ' && OffsetedBuffer[i-1] != L' ') {
+            OffsetedBuffer[i] = L'\0';
+            i++;
+            while (OffsetedBuffer[i] == L' ') i++;
+            if (OffsetedBuffer[i] == L'\0') break;
+            argv[j++] = OffsetedBuffer + i;
+        }
+    }
+        
     for(UINTN i = 0;i<CMD_COUNT;i++){
-        if(!StrCmp(buffer+Offset,Commands[i].name)){
-            Commands[i].func(Args);
+        if(!StrCmp(argv[0],Commands[i].name)){
+            Commands[i].func(ArgCount, argv);
             kfree(buffer);
             return EFI_SUCCESS;
         }

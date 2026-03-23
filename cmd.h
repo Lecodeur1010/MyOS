@@ -6,7 +6,7 @@
 
 typedef struct {
     CHAR16 *name;
-    EFI_STATUS (*func)(CHAR16 *args);
+    EFI_STATUS (*func)(UINTN argc, CHAR16** argv);
     CHAR16 *description;
 } COMMAND;
 
@@ -22,24 +22,25 @@ extern COMMAND Commands[];
 extern UINTN CMD_COUNT;
 extern CHAR16* WorkingDir;
 
-EFI_STATUS CMDhelp(CHAR16* Args);
-EFI_STATUS CMDpower(CHAR16* Args);
-EFI_STATUS CMDtime(CHAR16* Args);
-EFI_STATUS CMDclear(CHAR16* Args);
-EFI_STATUS CMDexit(CHAR16* Args);
-EFI_STATUS CMDexc(CHAR16* Args);
+EFI_STATUS CMDhelp(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDpower(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDtime(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDclear(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDexit(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDexc(UINTN argc, CHAR16** argv);
 CHAR16* GetPrompt();
-EFI_STATUS CMDls(CHAR16* Args);
-EFI_STATUS CMDcd(CHAR16* Args);
-EFI_STATUS CMDpwd(CHAR16* Args);
-EFI_STATUS CMDmkdir(CHAR16* Args);
-EFI_STATUS CMDrm(CHAR16* Args);
-EFI_STATUS CMDcat(CHAR16* Args);
-EFI_STATUS CMDmap(CHAR16* Args);
-EFI_STATUS CMDvol(CHAR16* Args);
-EFI_STATUS CMDtest(CHAR16* Args);
-EFI_STATUS CMDconfig(CHAR16* Args);
-EFI_STATUS CMDlistres(CHAR16* Args);
-EFI_STATUS CMDsetres(CHAR16* Args);
+EFI_STATUS CMDls(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDcd(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDpwd(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDmkdir(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDrm(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDcat(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDmap(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDvol(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDtest(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDcheckargs(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDconfig(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDlistres(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDsetres(UINTN argc, CHAR16** argv);
 void Init(EFI_HANDLE ImageHandle);
 #endif

@@ -4,15 +4,23 @@
 #include "func.h"
 #include "font.h"
 
-#define LINE_HEIGHT 16
+#define CHAR_HEIGHT 16
+#define CHAR_WIDTH 8
+
+
+
 EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* GopInfo = NULL;
 EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
 UINT32 *Framebuffer;
 UINT32 *ActualFramebuffer;
+UINT32 *TempFramebuffer;
+UINT32 TempCursorX;
+UINT32 TempCursorY;
 UINT32 CursorX;
 UINT32 CursorY;
 UINT32 MaxChar;
 UINT32 MaxLines;
+BOOLEAN WaitForActualize = FALSE;
 
 UINT32 RGB(UINT8 Red, UINT8 Green, UINT8 Blue){
     if(!GopInfo)return 0;
@@ -58,24 +66,25 @@ EFI_STATUS GopInit(){
         }
         kfree(Info);
     }
-
-    BOOLEAN IsError = FALSE;
     
-    IsError = uefi_call_wrapper(gop->SetMode,2,gop,BestMode);
+    status = uefi_call_wrapper(gop->SetMode,2,gop,BestMode);
     
     
     GopInfo = gop->Mode->Info;
     ActualFramebuffer = (UINT32*)(UINTN)gop->Mode->FrameBufferBase;
-    Framebuffer = AllocatePool((GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
-
+    Framebuffer = kmalloc((GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
+    if(!Framebuffer){
+        //We skip double buffering
+        Framebuffer=ActualFramebuffer;
+    }
 
     CursorX = 0;
     CursorY = 0;
 
-    MaxChar = GopInfo->HorizontalResolution / 8;
-    MaxLines = GopInfo->VerticalResolution / LINE_HEIGHT;
+    MaxChar = GopInfo->HorizontalResolution / CHAR_WIDTH;
+    MaxLines = GopInfo->VerticalResolution / CHAR_HEIGHT;
     
-    if(IsError)CPrint(THEME_WARNING,L"Warning : Error occured while setting se resolution to the highest one ; default resolution used");
+    if(status)CPrint(THEME_WARNING,L"Warning : Error occured while setting se resolution to the highest one (%r)  ; default resolution used", status);
     return EFI_SUCCESS;
 }
 
@@ -86,17 +95,41 @@ EFI_STATUS RenderPixel(UINT32 Color,UINT32 x,UINT32 y){
 }
 
 EFI_STATUS FillDisplay(UINT32 Color){
-    for(UINTN y = 0;y<GopInfo->VerticalResolution;y++){
-        for(UINTN x = 0;x<GopInfo->HorizontalResolution;x++){
-            RenderPixel(Color,x,y);
-        }
+    for(UINTN pos = 0;pos<(GopInfo->VerticalResolution*GopInfo->PixelsPerScanLine);pos++){
+        Framebuffer[pos]=Color;
     }
+    Actualize();
     return EFI_SUCCESS;
 }
 
 void Actualize(){
     CopyMem(ActualFramebuffer,Framebuffer,(GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
+}
 
+void CPrintTemporaryBuffer(BOOLEAN State){
+    if(State){
+        TempCursorX=CursorX;
+        TempCursorY=CursorY;
+        CursorX=0;
+        CursorY=0;
+        TempFramebuffer=Framebuffer;
+        Framebuffer = kmalloc((GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
+        if(!Framebuffer)Framebuffer=ActualFramebuffer; //We skip double buffering
+        FillDisplay(0);
+    } else {
+        CursorX=TempCursorX;
+        CursorY=TempCursorY;
+        if(Framebuffer!=ActualFramebuffer)kfree(Framebuffer);
+        Framebuffer=TempFramebuffer;
+        TempFramebuffer=NULL;
+        Actualize();
+    }
+
+}
+
+void CPrintWait(BOOLEAN State){
+    WaitForActualize=State;
+    if(!State)Actualize();
 }
 
 void CPrint(UINT32 color, CONST CHAR16 *fmt, ...){
@@ -104,26 +137,45 @@ void CPrint(UINT32 color, CONST CHAR16 *fmt, ...){
     va_start(args, fmt);    
     UINTN Size = UnicodeVSPrint(NULL,0 , fmt, args);
     CHAR16* buffer = kmalloc((Size+1)*sizeof(CHAR16));
+    if(!buffer) return;
     UnicodeVSPrint(buffer,(Size+1)*sizeof(CHAR16) , fmt, args);
     va_end(args);                   
     RenderString(buffer,color);
+    kfree(buffer);
+    if(!WaitForActualize)
+    Actualize();
+}
+
+void CPrintFree(UINT32 PosX, UINT32 PosY, UINT32 color, CONST CHAR16 *fmt, ...){
+    va_list args;
+    va_start(args, fmt);    
+    UINTN Size = UnicodeVSPrint(NULL,0 , fmt, args);
+    CHAR16* buffer = kmalloc((Size+1)*sizeof(CHAR16));
+    if(!buffer) return;
+    UnicodeVSPrint(buffer,(Size+1)*sizeof(CHAR16) , fmt, args);
+    va_end(args);
+    UINT32 CursorXTemp = CursorX;
+    UINT32 CursorYTemp = CursorY; 
+    CursorX=PosX;
+    CursorY=PosY;                  
+    RenderString(buffer,color);
+    CursorX=CursorXTemp;
+    CursorY=CursorYTemp;
     kfree(buffer);
     Actualize();
 }
 
 void Scroll() {
-    UINTN line_size = GopInfo->PixelsPerScanLine * LINE_HEIGHT;
-    UINTN total_pixels = (GopInfo->VerticalResolution - LINE_HEIGHT) * GopInfo->PixelsPerScanLine;
+    UINTN line_size = GopInfo->PixelsPerScanLine * CHAR_HEIGHT;
+    UINTN total_pixels = (GopInfo->VerticalResolution - CHAR_HEIGHT) * GopInfo->PixelsPerScanLine;
 
     CopyMem(Framebuffer,Framebuffer + line_size,total_pixels * sizeof(UINT32));
-    // Effacer la dernière ligne
-    UINTN* last_line64 = (UINTN*)&Framebuffer[(GopInfo->VerticalResolution - LINE_HEIGHT) * GopInfo->PixelsPerScanLine];
+    UINTN* last_line64 = (UINTN*)&Framebuffer[(GopInfo->VerticalResolution - CHAR_HEIGHT) * GopInfo->PixelsPerScanLine];
     UINTN line_blocks64 = line_size / 2;
 
     for (UINTN i = 0; i < line_blocks64; i++)
         last_line64[i] = 0;
 
-    // Dernier pixel si impair
     if (line_size % 2)
         last_line64[line_blocks64 * 2] = 0;
 
@@ -132,11 +184,18 @@ void Scroll() {
 }
 
 UINT16 GetCharIndex(CHAR16 c){
-    for (int i = 0; i < 749; i++) {
+    for (int i = 0; i < sizeof(font_default_code_points) / sizeof(CHAR16); i++) {
         if (font_default_code_points[i] == c)
             return i;
     }
-    return 32;
+    //Not found; trying '?'
+    for (int i = 0; i < sizeof(font_default_code_points) / sizeof(CHAR16); i++) {
+        if (font_default_code_points[i] == L'?')
+            return i;
+    }
+    //Not found either - idc anymore
+    return 0;
+    
 }
 
 void RenderChar(CHAR16 c,UINT32 Color){
@@ -154,13 +213,13 @@ void RenderChar(CHAR16 c,UINT32 Color){
     }
      else {
         UINT16 index = GetCharIndex(c);
-        for(CHAR8 Y = 0;Y<LINE_HEIGHT;Y++){
+        for(CHAR8 Y = 0;Y<CHAR_HEIGHT;Y++){
             UINT8 line_byte = font_default_data[index][Y][0];
-            for(CHAR8 X = 0;X<8;X++){
+            for(CHAR8 X = 0;X<CHAR_WIDTH;X++){
                 if (line_byte & (1 << (7 - X)))
-                    RenderPixel(Color, CursorX*8 + X, CursorY*LINE_HEIGHT + Y);
+                    RenderPixel(Color, CursorX*CHAR_WIDTH + X, CursorY*CHAR_HEIGHT + Y);
                 else 
-                    RenderPixel(0, CursorX*8 + X, CursorY*LINE_HEIGHT + Y);
+                    RenderPixel(0, CursorX*CHAR_WIDTH + X, CursorY*CHAR_HEIGHT + Y);
                 
             }
         }
@@ -182,6 +241,12 @@ void RenderString(CHAR16* buffer,UINT32 Color){
     }
 }
 
+EFI_STATUS GetCursor(INT64* X,INT64* Y){
+    *X = CursorX;
+    *Y = CursorY;
+    return EFI_SUCCESS;
+}
+
 EFI_STATUS SetCursor(INT64 X,INT64 Y){
     if(X>=0)
         if(X<=MaxChar)
@@ -193,7 +258,8 @@ EFI_STATUS SetCursor(INT64 X,INT64 Y){
 
 GopModeList* GetModeList(UINTN* Count){
     *Count = gop->Mode->MaxMode;
-    GopModeList* ModeList = AllocatePool(*Count * sizeof(GopModeList));
+    GopModeList* ModeList = kmalloc(*Count * sizeof(GopModeList));
+    if(!ModeList) return NULL;
     EFI_STATUS status;
     for (UINT32 i = 0; i < *Count; i++) {
         EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info;
@@ -218,13 +284,17 @@ EFI_STATUS SetMode(UINTN Mode)
     if(EFI_ERROR(status)) return status;
     GopInfo = gop->Mode->Info;
     ActualFramebuffer = (UINT32*)(UINTN)gop->Mode->FrameBufferBase;
-    FreePool(Framebuffer);
+    if(Framebuffer!=ActualFramebuffer)FreePool(Framebuffer);
     Framebuffer = kmalloc((GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
+    if(!Framebuffer){
+        //We skip double buffering
+        Framebuffer=ActualFramebuffer;
+    }
     FillDisplay(0);
 
     CursorX = 0;
     CursorY = 0;
 
     MaxChar = GopInfo->HorizontalResolution / 8;
-    MaxLines = GopInfo->VerticalResolution / LINE_HEIGHT;
+    MaxLines = GopInfo->VerticalResolution / CHAR_HEIGHT;
 }

@@ -3,9 +3,27 @@
 #include <efilib.h>
 #include "display.h"
 
-CHAR16 QwertyToAzerty(CHAR16 key){
+EFI_INPUT_KEY WaitForInput(){
+    EFI_INPUT_KEY Key;
+    Key.ScanCode=0;
+    Key.UnicodeChar=0;
+    UINTN index;
+    EFI_STATUS status;
+    uefi_call_wrapper(ST->BootServices->WaitForEvent, 3,
+                      1, ST->ConIn->WaitForKey, &index);
+    status = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
+                               ST->ConIn, &Key);
+    if(EFI_ERROR(status)){
+        return Key;
+    }
+    // Convert QWERTY to AZERTY; comment line 20 and uncomment line 21 to disable this feature
+    return QwertyToAzerty(Key);
+    //return Key;
+}
+
+EFI_INPUT_KEY QwertyToAzerty(EFI_INPUT_KEY key){
     CHAR16 keyO ;
-    switch (key)
+    switch (key.UnicodeChar)
     {
     case L'q': keyO = L'a'; break;
     case L'Q': keyO = L'A'; break;
@@ -31,9 +49,11 @@ CHAR16 QwertyToAzerty(CHAR16 key){
     case L')': keyO = L'0'; break;
     case L'.': keyO = L':'; break;
     case L'<': keyO = L'.'; break;
-    default: keyO = key; break;
+    default: keyO = key.UnicodeChar; break;
     }
-    return keyO;
+    EFI_INPUT_KEY key1;
+    key.UnicodeChar = keyO;
+    return key;
 }
 
 void* kmalloc(UINTN Size){

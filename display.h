@@ -22,10 +22,15 @@ extern EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* GopInfo;
 UINT32 RGB(UINT8 Red,UINT8 Green,UINT8 Blue);
 
 EFI_STATUS SetCursor(INT64 X,INT64 Y);
+EFI_STATUS GetCursor(INT64* X,INT64* Y);
 EFI_STATUS GopInit();
 EFI_STATUS RenderPixel(UINT32 Color,UINT32 x,UINT32 y);
 EFI_STATUS FillDisplay(UINT32 Color);
+void Actualize();
+void CPrintTemporaryBuffer(BOOLEAN State);
+void CPrintWait(BOOLEAN State);
 void CPrint(UINT32 color, CONST CHAR16 *fmt, ...);
+void CPrintFree(UINT32 PosX, UINT32 PosY, UINT32 color, CONST CHAR16 *fmt, ...);
 void RenderString(CHAR16* buffer,UINT32 Color);
 UINT16 GetCharIndex(CHAR16 c);
 GopModeList* GetModeList(UINTN* Count);

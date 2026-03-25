@@ -35,6 +35,7 @@ EFI_STATUS CMDpwd(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDmkdir(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDrm(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDcat(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDnano(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDmap(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDvol(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDtest(UINTN argc, CHAR16** argv);

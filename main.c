@@ -4,25 +4,9 @@
 #include "cmd.h"
 #include "display.h"
 
-CHAR16 WaitForInput()
-{
-    EFI_INPUT_KEY Key;
-    UINTN index;
-    EFI_STATUS status;
-    uefi_call_wrapper(ST->BootServices->WaitForEvent, 3,
-                      1, ST->ConIn->WaitForKey, &index);
-    status = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
-                               ST->ConIn, &Key);
-    if(EFI_ERROR(status)){
-        return 0;
-    }
-    // Convert QWERTY to AZERTY; comment line 20 and uncomment line 21 to disable this feature
-    return QwertyToAzerty(Key.UnicodeChar);
-    //return Key.UnicodeChar;
-}
-
 CHAR16* WaitForCommand(){
     CHAR16* buffer = kmalloc(256*sizeof(CHAR16));
+    if(!buffer) return NULL;
     uint8_t pos = 0;
     
     if(!buffer)return NULL;
@@ -31,7 +15,7 @@ CHAR16* WaitForCommand(){
     kfree(prompt);
 
     while(1){
-        CHAR16 Key = WaitForInput();
+        CHAR16 Key = WaitForInput().UnicodeChar;
 
         
         if(!Key)continue;
@@ -62,25 +46,39 @@ EFI_STATUS RunCMD(CHAR16* buffer){
         return EFI_SUCCESS;
     }
     UINTN ArgCount = 1;
+    BOOLEAN InQuotes = FALSE;
     for(UINTN i = 1;OffsetedBuffer[i]!=L'\0';i++){//We skip the first char because it's from the name of the command
-        if(OffsetedBuffer[i]==L' ' && OffsetedBuffer[i-1]!=L' '){
+        if(OffsetedBuffer[i]==L'\"'){
+            InQuotes=!InQuotes;
+            continue;
+        }
+        if(OffsetedBuffer[i]==L' ' &&  !InQuotes){
             while(OffsetedBuffer[i]==L' ')i++;
             if(OffsetedBuffer[i]==L'\0')break;
             ArgCount++;
+            i--;
         }
     }
     CHAR16* argv[ArgCount];
     argv[0] = OffsetedBuffer;
+    InQuotes=FALSE;
     UINTN j = 1;
-
     for (UINTN i = 1; OffsetedBuffer[i] != L'\0'; i++) {
-        if (j == ArgCount) break;
-        if (OffsetedBuffer[i] == L' ' && OffsetedBuffer[i-1] != L' ') {
+        if(OffsetedBuffer[i]==L'\"'){
+            if(InQuotes)OffsetedBuffer[i]=L'\0';
+            InQuotes=!InQuotes;
+            continue;
+        }
+        if (OffsetedBuffer[i] == L' '  && !InQuotes) {
             OffsetedBuffer[i] = L'\0';
             i++;
             while (OffsetedBuffer[i] == L' ') i++;
             if (OffsetedBuffer[i] == L'\0') break;
-            argv[j++] = OffsetedBuffer + i;
+            if (OffsetedBuffer[i] == L'\"')
+                argv[j++] = OffsetedBuffer + i+1;
+            else 
+                argv[j++] = OffsetedBuffer + i;
+            i--;
         }
     }
         
@@ -91,25 +89,24 @@ EFI_STATUS RunCMD(CHAR16* buffer){
             return EFI_SUCCESS;
         }
     }
-    CPrint(THEME_ERROR,L"Error : CMD \"%s\" not recognized\n",buffer);
+    CPrint(THEME_ERROR,L"Error : CMD \"%s\" not recognized\n",OffsetedBuffer);
     kfree(buffer);
     return EFI_NOT_FOUND;
 
 }
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
-    
     InitializeLib(ImageHandle, SystemTable);
     EFI_STATUS status = GopInit();
+    CPrint(THEME_SUCCESS,L"Kernel loading ... !\n");
     if (EFI_ERROR(status)) return status;
     FillDisplay(RGB(0,0,0));
-
-
     Init(ImageHandle);
-
+    
     while(1){
         CHAR16* cmd = WaitForCommand();
         if(cmd)
-            RunCMD(cmd);}
+            RunCMD(cmd);
+    }
     return EFI_SUCCESS;
 }

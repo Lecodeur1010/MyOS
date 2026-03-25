@@ -3,7 +3,8 @@
 
 #ifndef FUNC
 #define FUNC
-CHAR16 QwertyToAzerty(CHAR16 key);
+EFI_INPUT_KEY WaitForInput();
+EFI_INPUT_KEY QwertyToAzerty(EFI_INPUT_KEY key);
 
 void* kmalloc(UINTN Size);
 void kfree(void* pointer);

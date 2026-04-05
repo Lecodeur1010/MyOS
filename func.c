@@ -2,67 +2,56 @@
 #include <efi.h>
 #include <efilib.h>
 #include "display.h"
+#include "memory.h"
+#include "vars.h"
+#include "io.h"
 
-EFI_INPUT_KEY WaitForInput(){
-    EFI_INPUT_KEY Key;
-    Key.ScanCode=0;
-    Key.UnicodeChar=0;
-    UINTN index;
+static const char scancode_map[128] = {
+    0, 27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
+    '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n', 0,
+    'a','s','d','f','g','h','j','k','l',';','\'','`', 0,
+    '\\','z','x','c','v','b','n','m',',','.','/', 0, '*', 0, ' ',
+    // ...
+};
+
+EFI_INPUT_KEY WaitForInput() {
+    UINT8 scancode;
+    EFI_INPUT_KEY Key = {0};
+
+    // attendre un octet disponible
+    while(!(inb(0x64) & 1));
+    scancode = inb(0x60);
+
+    // ignorer break codes
+    if(scancode & 0x80) return Key;
+
+    // convertir en CHAR16
+    Key.UnicodeChar = (CHAR16)scancode_map[scancode];
+    return Key;
+}
+
+EFI_STATUS ExitBootServices(EFI_HANDLE ImageHandle){
+    UINTN MapSize = 0;
+    EFI_MEMORY_DESCRIPTOR* Map = NULL;
+    UINTN MapKey = NULL;
+    UINTN DescriptorSize = 0,DesciptorVersion = 0;
     EFI_STATUS status;
-    uefi_call_wrapper(ST->BootServices->WaitForEvent, 3,
-                      1, ST->ConIn->WaitForKey, &index);
-    status = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
-                               ST->ConIn, &Key);
+    InBS = FALSE;
+    status = uefi_call_wrapper(BS->GetMemoryMap,5,&MapSize,Map,&MapKey,&DescriptorSize,&DesciptorVersion);
+    Map = kmalloc(MapSize+2*sizeof(EFI_MEMORY_DESCRIPTOR));
+    status = uefi_call_wrapper(BS->GetMemoryMap,5,&MapSize,Map,MapKey,&DescriptorSize,&DesciptorVersion);
     if(EFI_ERROR(status)){
-        return Key;
+        CPrint(THEME_ERROR,L"Error while fetching memory map : %r",status);
+        return status;
     }
-    // Convert QWERTY to AZERTY; comment line 20 and uncomment line 21 to disable this feature
-    return QwertyToAzerty(Key);
-    //return Key;
-}
-
-EFI_INPUT_KEY QwertyToAzerty(EFI_INPUT_KEY key){
-    CHAR16 keyO ;
-    switch (key.UnicodeChar)
-    {
-    case L'q': keyO = L'a'; break;
-    case L'Q': keyO = L'A'; break;
-    case L'w': keyO = L'z'; break;
-    case L'W': keyO = L'Z'; break;
-    case L'a': keyO = L'q'; break;
-    case L'A': keyO = L'Q'; break;
-    case L'z': keyO = L'w'; break;
-    case L'Z': keyO = L'W'; break;
-    case L';': keyO = L'm'; break;
-    case L':': keyO = L'M'; break;
-    case L'm': keyO = L','; break;
-    case L'M': keyO = L'?'; break;
-    case L'!': keyO = L'1'; break;
-    case L'@': keyO = L'2'; break;
-    case L'#': keyO = L'3'; break;
-    case L'$': keyO = L'4'; break;
-    case L'%': keyO = L'5'; break;
-    case L'^': keyO = L'6'; break;
-    case L'&': keyO = L'7'; break;
-    case L'*': keyO = L'8'; break;
-    case L'(': keyO = L'9'; break;
-    case L')': keyO = L'0'; break;
-    case L'.': keyO = L':'; break;
-    case L'<': keyO = L'.'; break;
-    default: keyO = key.UnicodeChar; break;
+    status = uefi_call_wrapper(BS->ExitBootServices,2,ImageHandle,MapKey);
+    if(EFI_ERROR(status)){
+        CPrint(THEME_ERROR,L"Error while exiting BS : %r",status);
+        return status;
     }
-    EFI_INPUT_KEY key1;
-    key.UnicodeChar = keyO;
-    return key;
+    kfree(Map);
+    CPrint(THEME_SUCCESS,L"BS exited successfuly !\n");
+    return status;
 }
-
-void* kmalloc(UINTN Size){
-    return AllocatePool(Size);
-}
-
-void kfree(void* pointer){
-    FreePool(pointer);
-}
-
 
 

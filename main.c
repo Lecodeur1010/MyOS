@@ -3,6 +3,7 @@
 #include "func.h"
 #include "cmd.h"
 #include "display.h"
+#include "memory.h"
 
 CHAR16* WaitForCommand(){
     CHAR16* buffer = kmalloc(256*sizeof(CHAR16));
@@ -16,8 +17,6 @@ CHAR16* WaitForCommand(){
 
     while(1){
         CHAR16 Key = WaitForInput().UnicodeChar;
-
-        
         if(!Key)continue;
         if(Key == L'\b' && pos>0){
             pos--;
@@ -84,9 +83,12 @@ EFI_STATUS RunCMD(CHAR16* buffer){
         
     for(UINTN i = 0;i<CMD_COUNT;i++){
         if(!StrCmp(argv[0],Commands[i].name)){
-            Commands[i].func(ArgCount, argv);
+            EFI_STATUS status = Commands[i].func(ArgCount, argv);
+            if(EFI_ERROR(status)){
+                CPrint(THEME_ERROR,L"%s exited with error code %u : %r\n",Commands[i].name,status,status);
+            }
             kfree(buffer);
-            return EFI_SUCCESS;
+            return status;
         }
     }
     CPrint(THEME_ERROR,L"Error : CMD \"%s\" not recognized\n",OffsetedBuffer);
@@ -98,10 +100,14 @@ EFI_STATUS RunCMD(CHAR16* buffer){
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     InitializeLib(ImageHandle, SystemTable);
     EFI_STATUS status = GopInit();
-    CPrint(THEME_SUCCESS,L"Kernel loading ... !\n");
     if (EFI_ERROR(status)) return status;
     FillDisplay(RGB(0,0,0));
     Init(ImageHandle);
+    CPrint(THEME_SUCCESS,L"Kernel loaded !\n");
+    status =  ExitBootServices(ImageHandle);
+    if(EFI_ERROR(status)){
+        CPrint(THEME_ERROR,L"Error : %r\n",status);
+    }
     
     while(1){
         CHAR16* cmd = WaitForCommand();

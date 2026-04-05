@@ -2,6 +2,7 @@
 #include <efi.h>
 #include <efilib.h>
 #include "func.h"
+#include "memory.h"
 #include "font.h"
 
 #define CHAR_HEIGHT 16
@@ -9,17 +10,14 @@
 
 
 
-EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* GopInfo = NULL;
-EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
-UINT32 *Framebuffer;
-UINT32 *ActualFramebuffer;
-UINT32 *TempFramebuffer;
-UINT32 TempCursorX;
-UINT32 TempCursorY;
-UINT32 CursorX;
-UINT32 CursorY;
-UINT32 MaxChar;
-UINT32 MaxLines;
+EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *GopInfo = NULL;
+EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
+UINT32 *Framebuffer = NULL;
+UINT32 *ActualFramebuffer = NULL;
+UINT32 CursorX = 0;
+UINT32 CursorY = 0;
+UINT32 MaxChar = 0;
+UINT32 MaxLines = 0;
 BOOLEAN WaitForActualize = FALSE;
 
 UINT32 RGB(UINT8 Red, UINT8 Green, UINT8 Blue){
@@ -94,6 +92,17 @@ EFI_STATUS RenderPixel(UINT32 Color,UINT32 x,UINT32 y){
     return EFI_SUCCESS;
 }
 
+EFI_STATUS DrawRectangle(UINT32 Color,UINT32 x,UINT32 y, UINT32 w, UINT32 h, BOOLEAN ActualBuffer){
+    if(!ActualBuffer)
+        for (UINTN i = x; i < x+w; i++)
+            for (UINTN j = y; y< y+h; j++)
+                Framebuffer[(GopInfo->PixelsPerScanLine)*j+i]=Color;        
+    else 
+        for (UINTN i = x; i < x+w; i++)
+            for (UINTN j = y; y< y+h; j++)
+                ActualFramebuffer[(GopInfo->PixelsPerScanLine)*j+i]=Color;
+}
+
 EFI_STATUS FillDisplay(UINT32 Color){
     for(UINTN pos = 0;pos<(GopInfo->VerticalResolution*GopInfo->PixelsPerScanLine);pos++){
         Framebuffer[pos]=Color;
@@ -104,27 +113,6 @@ EFI_STATUS FillDisplay(UINT32 Color){
 
 void Actualize(){
     CopyMem(ActualFramebuffer,Framebuffer,(GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
-}
-
-void CPrintTemporaryBuffer(BOOLEAN State){
-    if(State){
-        TempCursorX=CursorX;
-        TempCursorY=CursorY;
-        CursorX=0;
-        CursorY=0;
-        TempFramebuffer=Framebuffer;
-        Framebuffer = kmalloc((GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
-        if(!Framebuffer)Framebuffer=ActualFramebuffer; //We skip double buffering
-        FillDisplay(0);
-    } else {
-        CursorX=TempCursorX;
-        CursorY=TempCursorY;
-        if(Framebuffer!=ActualFramebuffer)kfree(Framebuffer);
-        Framebuffer=TempFramebuffer;
-        TempFramebuffer=NULL;
-        Actualize();
-    }
-
 }
 
 void CPrintWait(BOOLEAN State){
@@ -256,9 +244,18 @@ EFI_STATUS SetCursor(INT64 X,INT64 Y){
             CursorY=Y;
 }
 
-GopModeList* GetModeList(UINTN* Count){
+EFI_STATUS ToggleCursor(){
+    for (int y = 0; y < CHAR_HEIGHT; y++) {
+        for (int x = 0; x < CHAR_WIDTH; x++) {
+            ActualFramebuffer[(CursorY*CHAR_HEIGHT + y) * GopInfo->PixelsPerScanLine +
+                        (CursorX*CHAR_WIDTH + x)] ^= 0xFFFFFF; // inverse les couleurs
+        }
+    }
+    return EFI_SUCCESS;
+}
+GOP_MODE_LIST* GetModeList(UINTN* Count){
     *Count = gop->Mode->MaxMode;
-    GopModeList* ModeList = kmalloc(*Count * sizeof(GopModeList));
+    GOP_MODE_LIST* ModeList = kmalloc(*Count * sizeof(GOP_MODE_LIST));
     if(!ModeList) return NULL;
     EFI_STATUS status;
     for (UINT32 i = 0; i < *Count; i++) {

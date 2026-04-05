@@ -22,18 +22,20 @@ extern COMMAND Commands[];
 extern UINTN CMD_COUNT;
 extern CHAR16* WorkingDir;
 
+CHAR16* GetPrompt();
+
 EFI_STATUS CMDhelp(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDpower(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDtime(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDclear(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDexit(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDexc(UINTN argc, CHAR16** argv);
-CHAR16* GetPrompt();
 EFI_STATUS CMDls(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDcd(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDpwd(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDmkdir(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDrm(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDcp(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDcat(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDnano(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDmap(UINTN argc, CHAR16** argv);

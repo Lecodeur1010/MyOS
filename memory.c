@@ -3,25 +3,27 @@
 #include "memory.h"
 #include "vars.h"
 
-#define HEAP_SIZE 1024*1024*4 //4 MiB
-#define BLOCK_SIZE 4096
 
-BOOLEAN InBS=FALSE;
-
-UINT8 heap[HEAP_SIZE];
-MEMORY_MAP map[HEAP_SIZE/BLOCK_SIZE]; //Using page of 4KiB
+BOOLEAN InBS=TRUE;
+UINTN MemSize = 0;
+UINTN UsableMemSize = 0;
+UINTN UsedMem = 0;
+VOID* HeapStart;
+MEMORY_MAP* MapStart;
+UINTN HeapSize;
+UINTN MapSize;
 
 void* kmalloc(UINTN Size){
-    UINTN NumOfPage = (Size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    UINTN NumOfPage = (Size + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE;
     if(InBS){
         return AllocatePool(Size);
     } else {
-        for(UINTN i = 0; i < HEAP_SIZE/BLOCK_SIZE; i++){
-            if (i + NumOfPage > HEAP_SIZE / BLOCK_SIZE) break;
-            if(!map[i].Used){
+        for(UINTN i = 0; i < HeapSize/EFI_PAGE_SIZE; i++){
+            if (i + NumOfPage > HeapSize / EFI_PAGE_SIZE) break;
+            if(!MapStart[i].Used){
                 BOOLEAN Usable = TRUE;
                 for(UINTN j = i; j<i+NumOfPage;j++){
-                    if(map[j].Used){
+                    if(MapStart[j].Used){
                         Usable = FALSE;
                         break;
                     }
@@ -30,10 +32,11 @@ void* kmalloc(UINTN Size){
                     continue;
                 } else {
                     for(UINTN j = i; j<i+NumOfPage;j++){
-                        map[j].Used = TRUE;
-                        map[j].From = i;
+                        MapStart[j].Used = TRUE;
+                        MapStart[j].From = i;
                     }
-                    return &heap[i*BLOCK_SIZE];;
+                    UsedMem += NumOfPage * EFI_PAGE_SIZE;
+                    return HeapStart+i*EFI_PAGE_SIZE;
                 }
             }
         } 
@@ -45,21 +48,64 @@ void* kmalloc(UINTN Size){
 void kfree(void* pointer){
     if(InBS){
         FreePool(pointer);
-    } else {
-        if (pointer < (void*)heap || pointer >= (void*)(heap + HEAP_SIZE)) return;
-        UINTN offset = (UINT8*)pointer-(UINT8*)heap;
-        UINTN pos = offset / BLOCK_SIZE;
-        map[pos].Used=FALSE;
-        map[pos].From=0;
-        if(pos+1==HEAP_SIZE/BLOCK_SIZE)return;
-        for(UINTN i = pos;i<HEAP_SIZE / BLOCK_SIZE;i++){
-            if(map[i].Used && map[i].From==pos){
-                map[i].Used=FALSE;
-                map[i].From=0;
-            } else {
-                break;
-            }
+        return;
+    }
+    if ((UINT8*)pointer < (UINT8*)HeapStart ||(UINT8*)pointer >= (UINT8*)HeapStart + HeapSize)return; //Out od heap : impossible
+    UINTN offset = (UINT8*)pointer - (UINT8*)HeapStart;
+    if(offset % EFI_PAGE_SIZE != 0) //Not aligned
+        return;
+    UINTN pos = offset / EFI_PAGE_SIZE; //Start page number
+    if(!MapStart[pos].Used || MapStart[pos].From != pos) //Not used  or dependant : impossible
+        return;
+    MapStart[pos].Used = FALSE;
+    MapStart[pos].From = 0;
+    UsedMem -= EFI_PAGE_SIZE;
+    for(UINTN i = pos + 1; i < HeapSize / EFI_PAGE_SIZE; i++){
+        if(MapStart[i].Used && MapStart[i].From == pos){
+            MapStart[i].Used = FALSE;
+            MapStart[i].From = 0;
+            UsedMem -= EFI_PAGE_SIZE;
+        } else {
+            break;
         }
     }
-    return;
+}
+
+EFI_STATUS krealloc(VOID** pointer,UINTN size){
+    if(!pointer||!(*pointer)) return EFI_INVALID_PARAMETER; // No ptr
+    if(size<=4096) return EFI_SUCCESS; //Less than what's allocated, he can take the padding
+    UINTN NumOfPage = (size + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE;
+    UINTN offset = (UINT8*)*pointer - (UINT8*)HeapStart;
+    if(offset%EFI_PAGE_SIZE) return EFI_INVALID_PARAMETER; //Not aligned
+    UINTN pos = offset/EFI_PAGE_SIZE;
+    BOOLEAN usable = TRUE;
+    for(UINTN i = 1; i < NumOfPage; i++){ //Check if we can expend
+        if((!MapStart[pos+i].Used)||(MapStart[pos+i].From==pos)) continue;
+        usable = FALSE; 
+        break;
+    }
+    if(usable){// Expand
+        for(UINTN i = 1; i < NumOfPage; i++){
+            MapStart[pos+i].From = pos;
+            
+        }
+        return EFI_SUCCESS;
+    }   
+    
+    VOID* tmp = kmalloc(size);
+    if(!tmp) return EFI_OUT_OF_RESOURCES;
+    UINTN pageCount = 1;
+    for(UINTN i = pos + 1; i < HeapSize / EFI_PAGE_SIZE; i++){
+        if(MapStart[i].Used && MapStart[i].From == pos){
+            pageCount++;
+            UsedMem+=EFI_PAGE_SIZE;
+        } else {
+            break;
+        }
+    }
+    CopyMem(tmp,*pointer,pageCount*EFI_PAGE_SIZE);
+    kfree(*pointer);
+    *pointer = tmp;
+    return EFI_SUCCESS;
+    
 }

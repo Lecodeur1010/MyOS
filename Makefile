@@ -8,8 +8,10 @@ OBJ = $(SRC:.c=.o)
 	-fpic \
 	-fshort-wchar \
 	-mno-red-zone \
+	-maccumulate-outgoing-args \
 	-I /usr/include/efi \
 	-I /usr/include/efi/x86_64 \
+	-Wall \
 	-o $@
 
 main.so : $(OBJ)
@@ -47,12 +49,21 @@ run : main.efi
 	printf "fs0:\ncd \\EFI\\BOOT\nBOOTX64.EFI\n" > esp/startup.nsh
 	qemu-system-x86_64 -cpu qemu64 \
         -drive if=pflash,format=raw,unit=0,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
-		-drive if=pflash,format=raw,unit=1,file=OVMF_VARS.fd \
-        -drive format=raw,if=virtio,file=fat:rw:esp \
-		-drive format=raw,if=virtio,file=image.img \
+		-device ahci,id=ahci0 \
+		-drive file=fat:rw:esp,if=none,id=d0,format=raw \
+		-device ide-hd,bus=ahci0.0,drive=d0 \
+		-drive file=44S.img,if=none,id=d1,format=raw \
+		-device ide-hd,bus=ahci0.1,drive=d1 \
+		-drive file=2048S.img,if=none,id=d2,format=raw \
+		-device ide-hd,bus=ahci0.2,drive=d2 \
+		-drive file=2048.img,if=none,id=d3,format=raw \
+		-device ide-hd,bus=ahci0.3,drive=d3 \
+		-drive file=2048M.img,if=none,id=d4,format=raw \
+		-device ide-hd,bus=ahci0.4,drive=d4\
         -net none \
-		-display gtk,zoom-to-fit=on
-
+		-m 1G\
+		-display gtk,zoom-to-fit=on\
+		-serial stdio
 install:main.efi
 	sudo mount /dev/nvme0n1p1 /mnt/efi
 	sudo cp main.efi /mnt/efi/EFI/Misc/OS.efi

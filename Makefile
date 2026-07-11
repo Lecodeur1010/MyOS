@@ -1,46 +1,30 @@
-main.o : main.c
-	gcc main.c \
-	-c \
-	-fno-stack-protector \
-	-fpic \
-	-fshort-wchar \
-	-mno-red-zone \
-	-I /usr/include/efi \
-	-I /usr/include/efi/x86_64 \
-	-o main.o
-func.o : func.c
-	gcc func.c \
-	-c \
-	-fno-stack-protector \
-	-fpic \
-	-fshort-wchar \
-	-mno-red-zone \
-	-I /usr/include/efi \
-	-I /usr/include/efi/x86_64 \
-	-o func.o
-cmd.o : cmd.c
-	gcc cmd.c \
-	-c \
-	-fno-stack-protector \
-	-fpic \
-	-fshort-wchar \
-	-mno-red-zone \
-	-I /usr/include/efi \
-	-I /usr/include/efi/x86_64 \
-	-o cmd.o
-display.o : display.c
-	gcc display.c \
-	-c \
-	-fno-stack-protector \
-	-fpic \
-	-fshort-wchar \
-	-mno-red-zone \
-	-I /usr/include/efi \
-	-I /usr/include/efi/x86_64 \
-	-o display.o
+all : main.efi
 
-main.so : main.o func.o cmd.o  display.o 
-	ld main.o func.o cmd.o  display.o                     \
+SRC_C = $(wildcard *.c)
+SRC_ASM = $(wildcard *.S)
+OBJ = $(SRC_C:.c=.o) $(SRC_ASM:.S=.o)
+.PHONY: all run install clean
+
+%.o: %.c
+	gcc $< \
+	-c \
+	-fno-stack-protector \
+	-fpic \
+	-fshort-wchar \
+	-mno-red-zone \
+	-fno-inline \
+	-fno-merge-constants \
+	-I /usr/include/efi \
+	-I /usr/include/efi/x86_64 \
+	-Wall \
+	-O2 \
+	-o $@
+
+%.o: %.S
+	gcc -c $< -mno-red-zone -o $@
+
+main.so : $(OBJ)
+	ld $(OBJ)                     \
         /usr/lib/crt0-efi-x86_64.o     \
         -nostdlib                      \
         -znocombreloc                  \
@@ -66,22 +50,31 @@ main.efi : main.so
         main.so                        \
         main.efi
 
-all : main.efi
-
 run : main.efi
-	mkdir -p esp/EFI/BOOT
-	cp main.efi esp/EFI/BOOT/BOOTX64.EFI
-	printf "fs0:\ncd \\EFI\\BOOT\nBOOTX64.EFI\n" > esp/startup.nsh
-	qemu-system-x86_64 -cpu qemu64 \
-        -drive if=pflash,format=raw,unit=0,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
-        -drive format=raw,file=fat:rw:esp \
-		-drive format=raw,file=image.img \
-        -net none \
-		-display gtk,zoom-to-fit=on\
+	mkdir -p FS/EFI/BOOT
+	cp main.efi FS/EFI/BOOT/BOOTX64.EFI
+	printf "fs0:\ncd \\EFI\\BOOT\nBOOTX64.EFI\n" > FS/startup.nsh
+	dd if=/dev/zero of=main.img bs=1M count=64
+	parted -s main.img mklabel gpt
+	parted -s main.img mkpart primary fat32 2048s 100%
+	parted -s main.img set 1 esp on
+	mformat -i main.img@@1048576 -F -v "MAIN"
+	mcopy -o -i main.img@@1048576 -s FS/* ::/
+	qemu-system-x86_64 -enable-kvm -cpu host -m 1024 -d int,pcall,guest_errors -D qemu.log\
+		-drive if=pflash,format=raw,unit=0,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
+		-drive format=raw,file=disk1.img \
+		-drive format=raw,file=disk2.img \
+		-drive format=raw,file=main.img \
+		-net none \
+		-serial stdio \
+		-display gtk,zoom-to-fit=on \
+		-net none
 
-install:main.efi
-	@read -p "Disque" dev; \
-	sudo mount $$dev /mnt && sudo cp main.efi /mnt/EFI/Apps/main.EFI && sudo umount /mnt
+#convert to TGA : convert img.png -define tga:compression=none -depth 8 -type truecoloralpha image.tga
+
+install: main.efi
+	sudo mkdir -p /boot/efi/EFI/Misc
+	sudo cp main.efi /boot/efi/EFI/Misc/OS.efi
 
 clean:
-	rm -rf *.o *.so *.efi esp
+	rm -rf *.o *.so *.efi esp 

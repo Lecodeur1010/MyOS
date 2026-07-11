@@ -3,10 +3,11 @@
 #include <efilib.h>
 #include "func.h"
 #include "font.h"
+#include "disk.h"
+#include "graphics.h"
 
 #define CHAR_HEIGHT 16
 #define CHAR_WIDTH 8
-
 
 
 EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* GopInfo = NULL;
@@ -21,6 +22,9 @@ UINT32 CursorY;
 UINT32 MaxChar;
 UINT32 MaxLines;
 BOOLEAN WaitForActualize = FALSE;
+UINTN ModeCount = 0;
+FS_NODE* ShellNode;
+
 
 UINT32 RGB(UINT8 Red, UINT8 Green, UINT8 Blue){
     if(!GopInfo)return 0;
@@ -69,7 +73,6 @@ EFI_STATUS GopInit(){
     
     status = uefi_call_wrapper(gop->SetMode,2,gop,BestMode);
     
-    
     GopInfo = gop->Mode->Info;
     ActualFramebuffer = (UINT32*)(UINTN)gop->Mode->FrameBufferBase;
     Framebuffer = kmalloc((GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
@@ -84,29 +87,16 @@ EFI_STATUS GopInit(){
     MaxChar = GopInfo->HorizontalResolution / CHAR_WIDTH;
     MaxLines = GopInfo->VerticalResolution / CHAR_HEIGHT;
     
-    if(status)CPrint(THEME_WARNING,L"Warning : Error occured while setting se resolution to the highest one (%r)  ; default resolution used", status);
+    if(status)CPrint(ActualConfig.Theme.Warning,L"Warning : Error occured while setting se resolution to the highest one (%r)  ; default resolution used", status);
     return EFI_SUCCESS;
 }
 
-EFI_STATUS RenderPixel(UINT32 Color,UINT32 x,UINT32 y){
-    UINT64 Pos = (GopInfo->PixelsPerScanLine)*y+x;
-    Framebuffer[Pos]=Color;
-    return EFI_SUCCESS;
-}
-
-EFI_STATUS FillDisplay(UINT32 Color){
-    for(UINTN pos = 0;pos<(GopInfo->VerticalResolution*GopInfo->PixelsPerScanLine);pos++){
-        Framebuffer[pos]=Color;
-    }
-    Actualize();
-    return EFI_SUCCESS;
-}
 
 void Actualize(){
     CopyMem(ActualFramebuffer,Framebuffer,(GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
 }
 
-void CPrintTemporaryBuffer(BOOLEAN State){
+void TemporaryBuffer(BOOLEAN State){
     if(State){
         TempCursorX=CursorX;
         TempCursorY=CursorY;
@@ -134,16 +124,52 @@ void CPrintWait(BOOLEAN State){
 
 void CPrint(UINT32 color, CONST CHAR16 *fmt, ...){
     va_list args;
-    va_start(args, fmt);    
+    va_start(args, fmt);   
     UINTN Size = UnicodeVSPrint(NULL,0 , fmt, args);
     CHAR16* buffer = kmalloc((Size+1)*sizeof(CHAR16));
     if(!buffer) return;
     UnicodeVSPrint(buffer,(Size+1)*sizeof(CHAR16) , fmt, args);
-    va_end(args);                   
+    va_end(args); 
+    Print(L"%s",buffer); 
     RenderString(buffer,color);
     kfree(buffer);
     if(!WaitForActualize)
     Actualize();
+}
+
+void ShellPrint(UINT32 color, CONST CHAR16 *fmt, ...){
+    va_list args;
+    va_start(args, fmt);    
+    UINTN SizeChars = UnicodeVSPrint(NULL, 0, fmt, args);
+    CHAR16* buffer = kmalloc((SizeChars + 1) * sizeof(CHAR16));
+    
+    if(!buffer) { va_end(args); return; }
+    UnicodeVSPrint(buffer, (SizeChars + 1) * sizeof(CHAR16), fmt, args);
+    va_end(args); 
+
+    if (ShellNode) {
+        // CAS 1 : C'est un vrai fichier sur le disque (il possède un EfiFile)
+        if (ShellNode->EfiFile != NULL) {
+            CHAR8* utf8Buffer = kmalloc(SizeChars + 1);
+            Char16ToChar8(buffer, utf8Buffer, 0);
+            
+            // On écrit les octets CHAR8 sur le disque
+            ShellNode->Write(ShellNode, utf8Buffer, SizeChars, TRUE);
+            kfree(utf8Buffer);
+        } 
+        // CAS 2 : C'est un périphérique virtuel (comme \dev\tty)
+        else {
+            // Pas de disque = pas de conversion ! On envoie le CHAR16 natif.
+            // La taille en octets est Nombre de caractères * 2
+            ShellNode->Write(ShellNode, buffer, SizeChars * sizeof(CHAR16), TRUE);
+        }
+    } 
+    // CAS 3 : Pas de redirection, affichage console direct
+    else {
+        CPrint(color, buffer);
+    }
+    
+    kfree(buffer);
 }
 
 void CPrintFree(UINT32 PosX, UINT32 PosY, UINT32 color, CONST CHAR16 *fmt, ...){
@@ -172,29 +198,27 @@ void Scroll() {
     CopyMem(Framebuffer,Framebuffer + line_size,total_pixels * sizeof(UINT32));
     UINTN* last_line64 = (UINTN*)&Framebuffer[(GopInfo->VerticalResolution - CHAR_HEIGHT) * GopInfo->PixelsPerScanLine];
     UINTN line_blocks64 = line_size / 2;
-
+    UINTN double_pixel_color = ((UINTN)ActualConfig.Theme.Background << 32) | ActualConfig.Theme.Background;
     for (UINTN i = 0; i < line_blocks64; i++)
-        last_line64[i] = 0;
+        last_line64[i] = double_pixel_color;
 
     if (line_size % 2)
-        last_line64[line_blocks64 * 2] = 0;
+        last_line64[line_blocks64 * 2] = double_pixel_color;
 
     CursorY = MaxLines - 1;
 
 }
 
-UINT16 GetCharIndex(CHAR16 c){
-    for (int i = 0; i < sizeof(font_default_code_points) / sizeof(CHAR16); i++) {
-        if (font_default_code_points[i] == c)
+UINT16 GetCharIndex(CHAR16 c) {
+    for(UINTN i = 0; i < sizeof(font_default_code_points)/sizeof(font_default_code_points[0]); i++){
+        if(font_default_code_points[i]==c)
             return i;
     }
-    //Not found; trying '?'
-    for (int i = 0; i < sizeof(font_default_code_points) / sizeof(CHAR16); i++) {
-        if (font_default_code_points[i] == L'?')
+    for(UINTN i = 0; i < sizeof(font_default_code_points)/sizeof(font_default_code_points[0]); i++){
+        if(font_default_code_points[i]=='?')
             return i;
     }
-    //Not found either - idc anymore
-    return 0;
+    return 0; 
     
 }
 
@@ -219,7 +243,7 @@ void RenderChar(CHAR16 c,UINT32 Color){
                 if (line_byte & (1 << (7 - X)))
                     RenderPixel(Color, CursorX*CHAR_WIDTH + X, CursorY*CHAR_HEIGHT + Y);
                 else 
-                    RenderPixel(0, CursorX*CHAR_WIDTH + X, CursorY*CHAR_HEIGHT + Y);
+                    RenderPixel(ActualConfig.Theme.Background, CursorX*CHAR_WIDTH + X, CursorY*CHAR_HEIGHT + Y);
                 
             }
         }
@@ -254,14 +278,15 @@ EFI_STATUS SetCursor(INT64 X,INT64 Y){
     if(Y>=0)
         if(Y<=MaxLines)
             CursorY=Y;
+    return EFI_SUCCESS;
 }
 
-GopModeList* GetModeList(UINTN* Count){
-    *Count = gop->Mode->MaxMode;
-    GopModeList* ModeList = kmalloc(*Count * sizeof(GopModeList));
+GopModeList* GetModeList(){
+    ModeCount = gop->Mode->MaxMode;
+    GopModeList* ModeList = kmalloc(ModeCount * sizeof(GopModeList));
     if(!ModeList) return NULL;
     EFI_STATUS status;
-    for (UINT32 i = 0; i < *Count; i++) {
+    for (UINT32 i = 0; i < ModeCount; i++) {
         EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info;
         UINTN SizeOfInfo;
         status = uefi_call_wrapper(gop->QueryMode,4,gop, i, &SizeOfInfo, &Info);
@@ -281,10 +306,10 @@ GopModeList* GetModeList(UINTN* Count){
 EFI_STATUS SetMode(UINTN Mode)
 {
     EFI_STATUS status = uefi_call_wrapper(gop->SetMode,2,gop,Mode);
-    if(EFI_ERROR(status)) return status;
+    CHECK_STATUS(status);
     GopInfo = gop->Mode->Info;
     ActualFramebuffer = (UINT32*)(UINTN)gop->Mode->FrameBufferBase;
-    if(Framebuffer!=ActualFramebuffer)FreePool(Framebuffer);
+    if(Framebuffer!=ActualFramebuffer)kfree(Framebuffer);
     Framebuffer = kmalloc((GopInfo->VerticalResolution) * GopInfo->PixelsPerScanLine*sizeof(UINT32));
     if(!Framebuffer){
         //We skip double buffering
@@ -297,4 +322,5 @@ EFI_STATUS SetMode(UINTN Mode)
 
     MaxChar = GopInfo->HorizontalResolution / 8;
     MaxLines = GopInfo->VerticalResolution / CHAR_HEIGHT;
+    return EFI_SUCCESS;
 }

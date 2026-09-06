@@ -5,6 +5,9 @@
 #include "cmd.h"
 #include "display.h"
 #include "disk.h"
+#include "memory.h"
+#include "net.h"
+
 
 VOID PrintPrompt(CHAR16* Prompt, CHAR16* Path) {
     // Parcourir le prompt pour trouver le token "%s"
@@ -57,44 +60,34 @@ CHAR16* WaitForCommand(){
 EFI_STATUS RunCMD(CHAR16* buffer) {
     CHAR16* OffsetedBuffer = buffer;
     while (*OffsetedBuffer == L' ') OffsetedBuffer++; // Skip leading spaces
-    if (*OffsetedBuffer == L'\0') {
+    if (*OffsetedBuffer == L'\0' || *OffsetedBuffer == L'#') {
         return EFI_SUCCESS;
     }
-
-    // Phase 1: Backward Redirection Extraction
     CHAR16* redirect_file = NULL;
     BOOLEAN Append = FALSE;
     BOOLEAN InQuotes = FALSE;
     UINTN buffer_len = StrLen(OffsetedBuffer);
-
     for (INTN i = (INTN)buffer_len - 1; i >= 0; i--) {
         if (OffsetedBuffer[i] == L'\"') {
             InQuotes = !InQuotes;
             continue;
         }
-
         if (!InQuotes) {
-            // Check for Append Mode (>>)
             if (i > 0 && OffsetedBuffer[i] == L'>' && OffsetedBuffer[i - 1] == L'>') {
                 Append = TRUE;
-                OffsetedBuffer[i - 1] = L'\0'; // Cleanly truncate command here
+                OffsetedBuffer[i - 1] = L'\0'; 
                 redirect_file = &OffsetedBuffer[i + 1];
                 break;
             }
-            // Check for Write Mode (>)
             else if (OffsetedBuffer[i] == L'>') {
-                OffsetedBuffer[i] = L'\0'; // Cleanly truncate command here
+                OffsetedBuffer[i] = L'\0';
                 redirect_file = &OffsetedBuffer[i + 1];
                 break;
             }
         }
     }
-
-    // Phase 2: Open Redirection Target if detected
     if (redirect_file) {
-        while (*redirect_file == L' ') redirect_file++; // Skip spaces after operator
-        
-        // Strip quotes around file name if present
+        while (*redirect_file == L' ') redirect_file++;
         UINTN file_len = StrLen(redirect_file);
         if (file_len >= 2 && redirect_file[0] == L'\"' && redirect_file[file_len - 1] == L'\"') {
             redirect_file[file_len - 1] = L'\0';
@@ -107,12 +100,15 @@ EFI_STATUS RunCMD(CHAR16* buffer) {
             ShellNode = NULL;
             CPrint(ActualConfig.Theme.Warning, L"Couldn't open %s (%r); redirect to \\dev\\tty\n", redirect_file, status);
         } else {
-            // Empty write to initialize/advance file cursor appropriately
-            ShellNode->Write(ShellNode, L"", 0, Append);
+            status = ShellNode->Write(ShellNode, L"", 0, Append);
+            if(EFI_ERROR(status)){
+                ShellNode->Close(ShellNode);
+                CPrint(ActualConfig.Theme.Warning, L"Couldn't write %s (%r); redirect to \\dev\\tty\n", redirect_file, status);
+                redirect_file = NULL;
+                ShellNode=NULL;
+            }
         }
     }
-
-    // Phase 3: Tokenize Arguments (Safe now because OffsetedBuffer is explicitly null-terminated)
     UINTN ArgCount = 1;
     InQuotes = FALSE;
     for (UINTN i = 1; OffsetedBuffer[i] != L'\0'; i++) {
@@ -159,7 +155,6 @@ EFI_STATUS RunCMD(CHAR16* buffer) {
             return status;
         }
     }
-
     CPrint(ActualConfig.Theme.Error, L"Error : CMD \"%s\" not recognized\n", OffsetedBuffer);
     if (ShellNode) { ShellNode->Close(ShellNode); ShellNode = NULL; }
     return EFI_NOT_FOUND;
@@ -168,15 +163,17 @@ EFI_STATUS RunCMD(CHAR16* buffer) {
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     InitializeLib(ImageHandle, SystemTable);
     gImageHandle=ImageHandle;
-    EFI_STATUS status[5];
+    EFI_STATUS status[6];
+    InitAllocator();
     status[0] = GopInit();
     if (EFI_ERROR(status[0])) return status[0];
     status[1] = uefi_call_wrapper(BS->SetWatchdogTimer,4,0,0,0,NULL);
     status[2] = DiskInit();
     GeneralInit();
     status[3] = LoadCFG(L"\\mnt\\fs0\\boot.ini");
+    status[4] = InitNet();
     
-    FillDisplay(ActualConfig.Theme.Background);//Before this : loop in the BSOD; after : normal BSOD
+    FillDisplay(ActualConfig.Theme.Background);
     CPrint(ActualConfig.Theme.Info, L"Loading graphics ... ");
     CPrint(ActualConfig.Theme.Sucess, L"Graphics loaded !\n");
     CPrint(ActualConfig.Theme.Info, L"Disabling watchdog ... ");
@@ -186,7 +183,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
         CPrint(ActualConfig.Theme.Sucess,L"Watchdog diabled !\n");
     CPrint(ActualConfig.Theme.Info,L"Initializing drive FS ... ");
     if(EFI_ERROR(status[2]))
-        CPrint(ActualConfig.Theme.Error,L"Error while loading FS : %r\n");
+        CPrint(ActualConfig.Theme.Error,L"Error while loading FS : %r\n", status[2]);
     else 
         CPrint(ActualConfig.Theme.Sucess,L"Drive FS initialized successfuly !\n");
     CPrint(ActualConfig.Theme.Info,L"Loading configuration file ... ");
@@ -196,13 +193,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
         CPrint(ActualConfig.Theme.Error,L"Error while loading configuration file : %r\n",status[3]);
     else 
         CPrint(ActualConfig.Theme.Sucess,L"Configuration file loaded successfuly !\n");
+    CPrint(ActualConfig.Theme.Info,L"Intializing network stack ... ");
+    if(EFI_ERROR(status[4]))
+        CPrint(ActualConfig.Theme.Error,L"Error while initializing network stack : %r\n", status[4]);
+    else 
+        CPrint(ActualConfig.Theme.Sucess,L"Network stack initialized successfuly !\n");
     CPrint(ActualConfig.Theme.Info, L"Loading boot script ... ");
     CHAR16* args[] = { L"sh", L"\\mnt\\fs0\\boot.sh"};
-    status[4] = CMDsh(2,args);
-    if(status[4]==EFI_NOT_FOUND)
+    status[5] = CMDsh(2,args);
+    if(status[5]==EFI_NOT_FOUND)
         CPrint(ActualConfig.Theme.Warning,L"Boot script not found \n");
-    else if(EFI_ERROR(status[4]))
-        CPrint(ActualConfig.Theme.Error,L"Error while loading boot script : %r\n",status[4]);
+    else if(EFI_ERROR(status[5]))
+        CPrint(ActualConfig.Theme.Error,L"Error while loading boot script : %r\n",status[5]);
     else 
         CPrint(ActualConfig.Theme.Sucess,L"Boot script loaded successfuly !\n");
     while(1){

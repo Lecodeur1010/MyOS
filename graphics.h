@@ -23,5 +23,6 @@ typedef struct __attribute__((packed)) {
 } TGAHeader;
 
 EFI_STATUS RenderPixel(UINT32 Color,UINT32 x,UINT32 y);
+EFI_STATUS RenderPixelBypass(UINT32 Color,UINT32 x,UINT32 y);
 EFI_STATUS FillDisplay(UINT32 Color);
 EFI_STATUS LoadTGA(CHAR16* filename, UINTN startX, UINTN startY);

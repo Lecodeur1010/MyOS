@@ -2,7 +2,8 @@ all : main.efi
 
 SRC_C = $(wildcard *.c)
 SRC_ASM = $(wildcard *.S)
-OBJ = $(SRC_C:.c=.o) $(SRC_ASM:.S=.o)
+SRC_PSF = $(wildcard *.psf)
+OBJ = $(SRC_C:.c=.o) $(SRC_ASM:.S=.o) $(SRC_PSF:.psf=.o)
 .PHONY: all run install clean
 
 %.o: %.c
@@ -11,17 +12,24 @@ OBJ = $(SRC_C:.c=.o) $(SRC_ASM:.S=.o)
 	-fno-stack-protector \
 	-fpic \
 	-fshort-wchar \
+	-ffreestanding \
+	-fno-strict-aliasing \
 	-mno-red-zone \
-	-fno-inline \
-	-fno-merge-constants \
 	-I /usr/include/efi \
 	-I /usr/include/efi/x86_64 \
 	-Wall \
+	-Wshadow \
+	-Wdouble-promotion \
+	-Wformat=2 \
+	-Wunreachable-code \
 	-O2 \
 	-o $@
 
 %.o: %.S
 	gcc -c $< -mno-red-zone -o $@
+
+%.o: %.psf
+	objcopy -I binary -O elf64-x86-64 -B i386 $< $@
 
 main.so : $(OBJ)
 	ld $(OBJ)                     \
@@ -60,15 +68,17 @@ run : main.efi
 	parted -s main.img set 1 esp on
 	mformat -i main.img@@1048576 -F -v "MAIN"
 	mcopy -o -i main.img@@1048576 -s FS/* ::/
-	qemu-system-x86_64 -enable-kvm -cpu host -m 1024 -d int,pcall,guest_errors -D qemu.log\
+	qemu-system-x86_64 -enable-kvm -cpu host -m 1024\
 		-drive if=pflash,format=raw,unit=0,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
+		-drive if=pflash,format=raw,unit=1,file=./OVMF_VARS.fd \
+		-device virtio-rng-pci \
 		-drive format=raw,file=disk1.img \
 		-drive format=raw,file=disk2.img \
 		-drive format=raw,file=main.img \
-		-net none \
 		-serial stdio \
 		-display gtk,zoom-to-fit=on \
-		-net none
+		-netdev user,id=net0 \
+  		-device e1000,netdev=net0 \
 
 #convert to TGA : convert img.png -define tga:compression=none -depth 8 -type truecoloralpha image.tga
 

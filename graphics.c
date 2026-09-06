@@ -2,12 +2,19 @@
 #include "display.h"
 #include "disk.h"
 #include "func.h"
+#include "memory.h"
 #include <efi.h>
 #include <efilib.h>
 
 EFI_STATUS RenderPixel(UINT32 Color,UINT32 x,UINT32 y){
     UINT64 Pos = (GopInfo->PixelsPerScanLine)*y+x;
     Framebuffer[Pos]=Color;
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS RenderPixelBypass(UINT32 Color,UINT32 x,UINT32 y){
+    UINT64 Pos = (GopInfo->PixelsPerScanLine)*y+x;
+    ActualFramebuffer[Pos]=Color;
     return EFI_SUCCESS;
 }
 
@@ -23,11 +30,11 @@ EFI_STATUS FillDisplay(UINT32 Color){
 EFI_STATUS LoadTGA(CHAR16* filename, UINTN startX, UINTN startY){
     FS_NODE* Node;
     EFI_STATUS status = VFSOpen(ActualNode,filename,&Node,EFI_FILE_MODE_READ,0);
-    CHECK_STATUS(status);
+    CHECK_STATUS(status,NULL,TRUE,;);
     void* Buffer = NULL;
     UINTN Size = 0;
     status = VFSRead(Node,&Buffer,&Size);
-    CHECK_STATUS(status);
+    CHECK_STATUS(status,NULL,TRUE,;);
     TGAHeader* Header = (TGAHeader*)Buffer;
     BOOLEAN isTopDown = (Header->ImageDescriptor & 0x20) != 0;
     if(Header->ColorMapType!=0||Header->IDLength!=0||Header->ImageType!=2||(Header->BPP!=32&&Header->BPP!=24)){

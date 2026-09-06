@@ -9,6 +9,12 @@ typedef struct {
     CHAR16 *description;
 } COMMAND;
 
+typedef struct {
+    CHAR16* Buffer;
+    UINTN   CurrentSize;   // Taille allouée actuelle
+    UINTN   UsedSize;      // Nombre de caractères réellement utilisés
+} NANO_LINE;
+
 
 
 extern COMMAND Commands[];
@@ -28,7 +34,9 @@ EFI_STATUS CMDpwd(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDmkdir(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDrm(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDcp(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDdd(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDcat(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDhexdump(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDnano(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDvol(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDtest(UINTN argc, CHAR16** argv);
@@ -41,3 +49,8 @@ EFI_STATUS CMDloadcfg(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDresetcfg(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDreloadcfg(UINTN argc, CHAR16** argv);
 EFI_STATUS CMDimg(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDraminfo(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDdownload(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDnetdetails(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDnslookup(UINTN argc, CHAR16** argv);
+EFI_STATUS CMDsetfont(UINTN argc, CHAR16** argv);

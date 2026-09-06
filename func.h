@@ -33,17 +33,43 @@ typedef struct {
 extern CONFIG ActualConfig;
 extern CONFIG BackupConfig;
 
-#define CHECK_STATUS(status) do {if(EFI_ERROR(status)) return status;} while(0)
+#define CHECK_STATUS(src, msg, forceRender, action, ...) do { \
+    EFI_STATUS _s = (src); \
+    if (EFI_ERROR(_s)) { \
+        if (msg) { \
+            if (!forceRender) ShellPrint(ActualConfig.Theme.Error, msg, ##__VA_ARGS__); \
+            else CPrint(ActualConfig.Theme.Error, msg, ##__VA_ARGS__); \
+        } \
+        action; \
+        return _s; \
+    } \
+} while(0)
 
-void* kmalloc(UINTN Size);
-void kfree(void* pointer);
+#define NOP (void)0
+
+#define UTF8_MARGIN 3
+
+#if defined(__GNUC__) || defined(__clang__)
+static __inline__ UINT64 ReadTSC(VOID) {
+    UINT32 low, high;
+    __asm__ __volatile__ ("rdtsc" : "=a" (low), "=d" (high));
+    return ((UINT64)high << 32) | low;
+}
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#define ReadTSC __rdtsc
+#endif
 
 UINTN StrToHex(CONST CHAR16* Str);
+UINTN HexToStr(UINTN Value, CHAR16* Dest, UINTN MaxLength, BOOLEAN IncludePrefix, UINTN MinWidth);
 EFI_STATUS LoadCFG(CONST CHAR16* Path);
 void GetConfigValue(CHAR16* Line, CHAR16** Key, CHAR16** Value);
-UINTN Char16ToChar8(CONST CHAR16* Src, CHAR8* Dest, UINTN MaxLenght);
-UINTN Char8ToChar16(CONST CHAR8* Src, CHAR16* Dest, UINTN MaxLenght);
+UINTN Char16ToChar8(CONST CHAR16* Src, CHAR8** Dest);
+UINTN Char8ToChar16(CONST CHAR8* Src, CHAR16** Dest);
+UINTN AsciiSPrint(CHAR8 *Buffer, UINTN BufferSize, CONST CHAR8 *Format, ...);
+VOID FormatBytes(UINTN bytes, CHAR16* out_str) ;
 
 EFI_STATUS GeneralInit();
 EFI_STATUS SetKeyboardLeds(UINT8 mode);
-CHAR16* StrStr(CONST CHAR16* Str, CONST CHAR16* Search);
+UINT64 RandValue();
+UINT64 GetTSCFrequencyPerMs(VOID);

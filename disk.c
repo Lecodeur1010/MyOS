@@ -3,6 +3,7 @@
 #include "disk.h"
 #include "func.h"
 #include "display.h"
+#include "memory.h"
 
 #define SET_STUB(node_func_ptr, stub_func) (node_func_ptr) = (__typeof__(node_func_ptr))(stub_func)
 #define INCREMENT_REF_COUNT(node) do{FS_NODE* TempNode = (node);while(TempNode->Parent!=NULL){TempNode->RefCount++;TempNode=TempNode->Parent;}} while(0)
@@ -14,33 +15,36 @@ UINTN VolumesCount = 0;
 UINT8* VolumesInfo = NULL;
 FS_NODE* RootNode;
 FS_NODE* ActualNode;
-
+EFI_HANDLE RootHandle;
 
 DEV_NODE DevListColor[] = {
-    { L"bg",          UID_COLOR_BG,        NULL, ColorRead, ColorWrite ,30},
-    { L"info",        UID_COLOR_INFO,      NULL, ColorRead, ColorWrite ,30},
-    { L"error",       UID_COLOR_ERROR,     NULL, ColorRead, ColorWrite ,30},
-    { L"warning",     UID_COLOR_WARNING,   NULL, ColorRead, ColorWrite ,30},
-    { L"success",     UID_COLOR_SUCESS,    NULL, ColorRead, ColorWrite ,30},
-    { L"prompt",      UID_COLOR_PROMPT,    NULL, ColorRead, ColorWrite ,30},
-    { L"ls_file",     UID_COLOR_LS_FILE,   NULL, ColorRead, ColorWrite ,30},
-    { L"ls_folder",   UID_COLOR_LS_FOLDER, NULL, ColorRead, ColorWrite ,30},
+    { L"bg",          UID_COLOR_BG,        NULL, ColorRead, ColorWrite ,9},
+    { L"info",        UID_COLOR_INFO,      NULL, ColorRead, ColorWrite ,9},
+    { L"error",       UID_COLOR_ERROR,     NULL, ColorRead, ColorWrite ,9},
+    { L"warning",     UID_COLOR_WARNING,   NULL, ColorRead, ColorWrite ,9},
+    { L"success",     UID_COLOR_SUCESS,    NULL, ColorRead, ColorWrite ,9},
+    { L"prompt",      UID_COLOR_PROMPT,    NULL, ColorRead, ColorWrite ,9},
+    { L"ls_file",     UID_COLOR_LS_FILE,   NULL, ColorRead, ColorWrite ,9},
+    { L"ls_folder",   UID_COLOR_LS_FOLDER, NULL, ColorRead, ColorWrite ,9},
 };
 
 DEV_NODE DevListScreen[] ={
-    {L"width",UID_SCREEN_WIDTH,NULL,ScreenRead,ScreenWrite, 10},//If it's over 9999 it's okay to have an overflow
-    {L"height",UID_SCREEN_HEIGHT,NULL,ScreenRead,ScreenWrite, 10},
+    {L"width",  UID_SCREEN_WIDTH,NULL,ScreenRead,NULL, 5},//If it's over 9999 it's okay to have an overflow
+    {L"height",UID_SCREEN_HEIGHT,NULL,ScreenRead,NULL, 5},
 };
 
 DEV_NODE DevListRoot[] ={
-    {L"tty",UID_TTY,NULL,TTYRead,TTYWrite,4},
-    {L"prompt",UID_PROMPT,NULL,PromptRead,PromptWrite,32},
-    {L"screen",UID_SCREEN,DevOpen,NULL,NULL},
-    {L"color",UID_COLOR,DevOpen,NULL,NULL},
+    {L"tty",   UID_TTY,   NULL,   TTYRead,   TTYWrite,   2},
+    {L"zero",  UID_ZERO,  NULL,   ZeroRead,  NullWrite,  -1},
+    {L"null",  UID_NULL,  NULL,   NullRead,  NullWrite,  -1},
+    {L"urand", UID_URAND, NULL,   UrandRead, NullWrite,  -1},
+    {L"prompt",UID_PROMPT,NULL,   PromptRead,PromptWrite,64},
+    {L"screen",UID_SCREEN,DevOpen,NULL,      NULL,       0},
+    {L"color", UID_COLOR, DevOpen,NULL,      NULL,       0},
 };
 
 
-
+//-----------------------------GENERAL PURPOSE-----------------------------
 
 
 FS_NODE* CreateFSNode(FS_NODE* Parent, CONST CHAR16* Name, BOOLEAN IsDirectory) {
@@ -54,6 +58,7 @@ FS_NODE* CreateFSNode(FS_NODE* Parent, CONST CHAR16* Name, BOOLEAN IsDirectory) 
     Node->IsDirectory = IsDirectory;
     Node->RefCount = 0;
     Node->UID=0;
+    Node->Position=0;
     Node->Size = 0;
     Node->Volume=NULL;
     Node->EfiFile=NULL;
@@ -63,13 +68,15 @@ FS_NODE* CreateFSNode(FS_NODE* Parent, CONST CHAR16* Name, BOOLEAN IsDirectory) 
     SET_STUB(Node->Read, Forbidden);
     SET_STUB(Node->Write, Forbidden);
     SET_STUB(Node->Delete, Forbidden);
+    SET_STUB(Node->Seek, Forbidden);
+    SET_STUB(Node->Reset, Forbidden);
     return Node;
 }
 
 EFI_STATUS ListVolume(VOLUME** List, UINTN* Count) {
     EFI_STATUS status;
     EFI_HANDLE* HandleBuffer = NULL;
-    status = uefi_call_wrapper(gBS->LocateHandleBuffer, 5, ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, Count, &HandleBuffer);
+    status = uefi_call_wrapper(BS->LocateHandleBuffer, 5, ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, Count, &HandleBuffer);
     if (EFI_ERROR(status)) return status;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* fs;
     EFI_FILE_PROTOCOL* tmpRoot;
@@ -93,7 +100,6 @@ EFI_STATUS ListVolume(VOLUME** List, UINTN* Count) {
     if (!VolumesInfo || !Volumes) return EFI_OUT_OF_RESOURCES;
     UINT8* VolumesInfoPtr = VolumesInfo;
     INTN RootIndex = -1;
-    EFI_HANDLE RootHandle;
     UINTN cursor = 0;
     status = GetBootVolumeHandle(&RootHandle);
     if(!EFI_ERROR(status)){
@@ -175,36 +181,71 @@ CHAR16* GetRemainingPath(CONST CHAR16* Path) {
     return (CHAR16*)(Path + i);
 }
 
+EFI_STATUS GetBootVolumeHandle(EFI_HANDLE* OutDeviceHandle) {
+    EFI_STATUS status;
+    EFI_LOADED_IMAGE* LoadedImage;
+
+    // 1. On demande à l'UEFI les infos sur l'image (notre binaire) en cours d'exécution
+    status = uefi_call_wrapper(BS->OpenProtocol, 6,
+        gImageHandle,
+        &LoadedImageProtocol,
+        (VOID**)&LoadedImage,
+        gImageHandle,
+        NULL,
+        EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL
+    );
+    if (EFI_ERROR(status)) return status;
+
+    // 2. On extrait le DeviceHandle d'où provient notre binaire .efi
+    *OutDeviceHandle = LoadedImage->DeviceHandle;
+
+    // 3. On referme proprement le protocole
+    uefi_call_wrapper(BS->CloseProtocol, 4, gImageHandle, &LoadedImageProtocol, gImageHandle, NULL);
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS DiskInit(){
+    RootNode=CreateFSNode(NULL,L"",TRUE);
+    if(!RootNode) return EFI_OUT_OF_RESOURCES;
+    EFI_LOADED_IMAGE_PROTOCOL* LoadedImage = NULL;
+    EFI_STATUS status = uefi_call_wrapper(BS->HandleProtocol, 3,gImageHandle, &gEfiLoadedImageProtocolGuid, (VOID**)&LoadedImage);
+    status = ListVolume(&Volumes,&VolumesCount);
+    if(VolumesCount==0||EFI_ERROR(status)||!Volumes) return EFI_ABORTED;
+    RootNode->Volume=&(Volumes[0]);
+    RootNode->List=RootList;
+    RootNode->Open=RootOpen;
+    RootNode->RefCount=1;
+    ActualNode=RootNode;
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* VolumeFS = NULL;
+    status = uefi_call_wrapper(BS->HandleProtocol, 3, Volumes[0].Handle, &gEfiSimpleFileSystemProtocolGuid, (VOID**)&VolumeFS);
+    status = uefi_call_wrapper(VolumeFS->OpenVolume, 2, VolumeFS, &RootNode->EfiFile);
+    CHECK_STATUS(status,NULL,TRUE,;);
+    
+    return EFI_SUCCESS;
+}
+
+//---------------------------------HANDLERS--------------------------------
+
 EFI_STATUS VFSOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT64 Mode, UINT64 Attributes) {
     if (!Path || !OutNode) return EFI_INVALID_PARAMETER;
-
-    // 1. Détermination du point de départ (Absolu vs Relatif)
     FS_NODE* CurrentNode = (Path[0] == L'\\') ? RootNode : Parent;
     if (!CurrentNode) return EFI_INVALID_PARAMETER;
 
-    // Si le chemin commence par un slash, on l'ignore pour le parsing
     if (Path[0] == L'\\') {
         Path++;
     }
-
-    // Si le chemin est vide ou était juste "\", on retourne directement le point de départ
     if (StrLen(Path) == 0) {
         INCREMENT_REF_COUNT(CurrentNode);
         *OutNode = CurrentNode;
         return EFI_SUCCESS;
     }
-
-    // 2. Allocation unique du buffer de travail
     CHAR16* PathCopy = StrDuplicate(Path);
     if (!PathCopy) return EFI_OUT_OF_RESOURCES;
-
-    // 'Remaining' est un pointeur mobile qui va glisser le long de 'PathCopy'
     CHAR16* Remaining = PathCopy; 
     CHAR16* Element = NULL;
     EFI_STATUS status = EFI_SUCCESS;
-    // 3. Boucle "Saute-Mouton"
     while (StrLen(Remaining) > 0) {
-        // Extrait le morceau actuel (alloue probablement 'Element')
         status = GetNextPart(Remaining, &Element);
         if (EFI_ERROR(status)) {
             kfree(Element);
@@ -212,7 +253,7 @@ EFI_STATUS VFSOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT6
         }
         if (StrLen(Element) == 0) {
             kfree(Element);
-            Remaining = GetRemainingPath(Remaining); // Glisse au suivant
+            Remaining = GetRemainingPath(Remaining); 
             continue;
         }
         Remaining = GetRemainingPath(Remaining);
@@ -237,21 +278,14 @@ EFI_STATUS VFSOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT6
 
             FS_NODE* NextNode = NULL;
             status = CurrentNode->Open(CurrentNode, Element, &NextNode, Mode, Attributes);
-            kfree(Element); // Libération immédiate de la copie de l'élément
-
+            kfree(Element);
             if (EFI_ERROR(status)) {
-                break; // Erreur d'ouverture (ex: fichier introuvable)
+                break; 
             }
-
-            // On avance vers le nœud suivant
             CurrentNode = NextNode; 
         }
     }
-
-    // 4. Nettoyage unique de la mémoire allouée au départ
     kfree(PathCopy);
-
-    // 5. Conclusion
     if (EFI_ERROR(status)) {
         return status;
     }
@@ -280,6 +314,8 @@ EFI_STATUS VFSRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
     return Node->Read(Node,Buffer,Size);
 }
 
+//-----------------------------------MNT-----------------------------------
+
 EFI_STATUS MNTOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT64 Mode, UINT64 Attributes){
     if(!Parent||!Path) return EFI_INVALID_PARAMETER;
     EFI_STATUS status;
@@ -290,10 +326,12 @@ EFI_STATUS MNTOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT6
             (*OutNode)->Close=FSClose;
             (*OutNode)->List=FSList;
             (*OutNode)->Volume=&(Volumes[i]);
+            (*OutNode)->Reset = Reset;
+            (*OutNode)->Seek = Seek;
             EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* VolumeFS = NULL;
             status = uefi_call_wrapper(BS->HandleProtocol, 3, Volumes[i].Handle, &gEfiSimpleFileSystemProtocolGuid, (VOID**)&VolumeFS);
             status = uefi_call_wrapper(VolumeFS->OpenVolume, 2, VolumeFS, &((*OutNode)->EfiFile));
-            CHECK_STATUS(status);
+            CHECK_STATUS(status,NULL,TRUE,;);
             return EFI_SUCCESS;
         };
 
@@ -315,6 +353,8 @@ EFI_STATUS MNTList(FS_NODE* Node, EFI_FILE_INFO*** Content, UINTN* Count){
     return EFI_SUCCESS;
 }
 
+//----------------------------------STUBS----------------------------------
+
 EFI_STATUS Close(FS_NODE* Node){
     if(!Node) return EFI_INVALID_PARAMETER;
     Node->RefCount--;
@@ -329,10 +369,24 @@ EFI_STATUS Close(FS_NODE* Node){
     return status;
 }
 
+EFI_STATUS Seek(FS_NODE* Node, UINTN Pos){
+    if(!Node) return EFI_INVALID_PARAMETER;
+    Node->Position=(Pos>Node->Size?Node->Size:Pos);
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS Reset(FS_NODE* Node){
+    return Seek(Node,0);
+}
+
+EFI_STATUS Forbidden(FS_NODE* Node,...) {return EFI_UNSUPPORTED;}
+
+//-----------------------------------FS-----------------------------------
+
 EFI_STATUS FSOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT64 Mode, UINT64 Attributes){ 
     EFI_FILE_PROTOCOL* NewFile;
     EFI_STATUS status = uefi_call_wrapper(Parent->EfiFile->Open,5,Parent->EfiFile,&NewFile,Path, Mode,Attributes);
-    CHECK_STATUS(status);
+    CHECK_STATUS(status,NULL,TRUE,;);
     FS_NODE* NewNode = CreateFSNode(Parent,Path,FALSE);
     if(!NewNode){
         uefi_call_wrapper(NewFile->Close,1,NewFile);
@@ -345,6 +399,8 @@ EFI_STATUS FSOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT64
     NewNode->Close=FSClose;
     NewNode->Delete=FSDelete;
     NewNode->List=FSList;
+    NewNode->Reset=FSReset;
+    NewNode->Seek=FSSeek;
     NewNode->EfiFile=NewFile;
     UINTN Size = 0;
     status = uefi_call_wrapper(NewFile->GetInfo,4,NewFile,&gEfiFileInfoGuid,&Size,NULL);
@@ -372,13 +428,12 @@ EFI_STATUS FSOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT64
         
 }
 
-EFI_STATUS FSList(FS_NODE* Node, EFI_FILE_INFO*** Content, UINTN* Count)
-{
+EFI_STATUS FSList(FS_NODE* Node, EFI_FILE_INFO*** Content, UINTN* Count){
     EFI_FILE_PROTOCOL* tmpDir = NULL;
     EFI_STATUS status;
     tmpDir = Node->EfiFile;
     status = uefi_call_wrapper(tmpDir->SetPosition,2,tmpDir,0);
-    CHECK_STATUS(status);
+    CHECK_STATUS(status,NULL,TRUE,;);
     UINT8* ReadBuffer = kmalloc(1024);
     if(!ReadBuffer) return EFI_OUT_OF_RESOURCES;
     *Count = 0; UINTN Capacity = 16, Size = 1024;
@@ -427,25 +482,21 @@ EFI_STATUS FSList(FS_NODE* Node, EFI_FILE_INFO*** Content, UINTN* Count)
     return EFI_SUCCESS;
 }
 
-EFI_STATUS FSRead(FS_NODE* Node, VOID** Buffer, UINTN* Size)
-{
+EFI_STATUS FSRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
     if (!Node->EfiFile)
         return EFI_INVALID_PARAMETER;
     EFI_FILE_PROTOCOL* file = Node->EfiFile;
     EFI_STATUS status;
     if(!(*Buffer)) return EFI_OUT_OF_RESOURCES;
     status = uefi_call_wrapper(file->Read,3,file,Size,*Buffer);
+    uefi_call_wrapper(file->GetPosition,2,file,&(Node->Position));
     return status;
 }
 
 EFI_STATUS FSWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append) {
     if (!Node || !Buffer || !Node->EfiFile) return EFI_INVALID_PARAMETER;
     EFI_FILE_PROTOCOL* file = Node->EfiFile;
-    
-    // 1. Positionnement
     uefi_call_wrapper(file->SetPosition, 2, file, (Append ? 0xFFFFFFFFFFFFFFFF : 0));
-    
-    // 2. Écriture
     UINTN WrittenSize = Size;
     EFI_STATUS status = uefi_call_wrapper(file->Write, 3, file, &WrittenSize, (VOID*)Buffer);
     if (EFI_ERROR(status)) return status;
@@ -463,8 +514,6 @@ EFI_STATUS FSWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append
             kfree(Info);
         }
     }
-    // Si c'est Append, on ne touche à rien, UEFI gère la croissance tout seul !
-
     uefi_call_wrapper(file->Flush, 1, file);
     return status;
 }
@@ -494,13 +543,42 @@ EFI_STATUS FSDelete (FS_NODE* Node){
     return status; 
 }
 
+EFI_STATUS FSSeek(FS_NODE* Node, UINTN Pos){
+    if(!Node||!Node->EfiFile) return EFI_INVALID_PARAMETER;
+    EFI_STATUS status = uefi_call_wrapper(Node->EfiFile->SetPosition,2,Node->EfiFile,Pos);
+    CHECK_STATUS(status,NULL,TRUE,;);
+    status = uefi_call_wrapper(Node->EfiFile->GetPosition,2,Node->EfiFile,&Node->Position);
+    return status;
+}
+
+EFI_STATUS FSReset(FS_NODE* Node){
+    if(!Node||!Node->EfiFile) return EFI_INVALID_PARAMETER;
+    EFI_STATUS status ;
+    status = uefi_call_wrapper(Node->EfiFile->SetPosition,2,Node->EfiFile,0);
+    CHECK_STATUS(status,NULL,TRUE,;);
+    UINTN InfoSize = SIZE_OF_EFI_FILE_INFO + 256;
+    EFI_FILE_INFO* Info = kmalloc(InfoSize);
+    if (Info) {
+        status = uefi_call_wrapper(Node->EfiFile->GetInfo, 4, Node->EfiFile, &gEfiFileInfoGuid, &InfoSize, Info);
+        if (!EFI_ERROR(status)) {
+            Info->FileSize = 0; // On force la taille à la taille écrite
+            uefi_call_wrapper(Node->EfiFile->SetInfo, 4, Node->EfiFile, &gEfiFileInfoGuid, InfoSize, Info);
+        }
+        kfree(Info);
+    }
+    return FSSeek(Node,0);
+}
+
+//-----------------------------------ROOT-----------------------------------
+
 EFI_STATUS RootOpen(FS_NODE* Parent, CONST CHAR16* Element, FS_NODE** OutNode, UINT64 Mode, UINT64 Attributes) {
     if (!Parent || !Element || !OutNode) return EFI_INVALID_PARAMETER;
 
     if (StrCmp(Element, L"mnt") == 0) {
         *OutNode = CreateFSNode(Parent, L"mnt", TRUE);
         if (!*OutNode) return EFI_OUT_OF_RESOURCES;
-        
+        (*OutNode)->Reset = Reset;
+        (*OutNode)->Seek = Seek;
         (*OutNode)->Open  = MNTOpen;
         (*OutNode)->Close = Close;
         (*OutNode)->List  = MNTList;
@@ -508,7 +586,8 @@ EFI_STATUS RootOpen(FS_NODE* Parent, CONST CHAR16* Element, FS_NODE** OutNode, U
     } else if (StrCmp(Element, L"dev") == 0) {
         *OutNode = CreateFSNode(Parent, L"dev", TRUE);
         if (!*OutNode) return EFI_OUT_OF_RESOURCES;
-        
+        (*OutNode)->Reset = Reset;
+        (*OutNode)->Seek = Seek;
         (*OutNode)->Open  = DevOpen;
         (*OutNode)->Close = Close;
         (*OutNode)->List  = DevList;
@@ -579,13 +658,15 @@ EFI_STATUS DevOpen(FS_NODE* Parent, CONST CHAR16* Path, FS_NODE** OutNode, UINT6
             if (IsDir) {
                 NewNode->Open  = TargetList[i].Open; // DevOpen
                 NewNode->List  = DevList;
-                NewNode->Close = Close;
             } else {
                 // C'est un fichier/noeud terminal de périphérique
-                NewNode->Read  = TargetList[i].Read;
-                NewNode->Write = TargetList[i].Write;
-                NewNode->Close = Close;
+                if(TargetList[i].Read) NewNode->Read  = TargetList[i].Read;
+                if(TargetList[i].Write) NewNode->Write = TargetList[i].Write;
             }
+
+            NewNode->Close = Close;
+            NewNode->Reset = Reset;
+            NewNode->Seek = Seek;
 
             *OutNode = NewNode;
             return EFI_SUCCESS;
@@ -636,29 +717,29 @@ EFI_STATUS DevList(FS_NODE* Node, EFI_FILE_INFO*** Content, UINTN* Count) {
 }
 
 EFI_STATUS TTYRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
-    CHAR16* buf = (CHAR16*)(*Buffer);   
-    buf[1]=L'\0';
+    CHAR16 buf[2];   
+    buf[1]='\0';
     while (TRUE){
         EFI_INPUT_KEY key = WaitForInput();
         if(key.ScanCode==0x17){
-            buf[0]=L'\0';
+            buf[0]='\0';
             return EFI_ABORTED;
         }
         if(key.UnicodeChar){
             buf[0]=key.UnicodeChar;
+            kfree(*Buffer);
+            Char16ToChar8(buf,(CHAR8**)Buffer);
             return EFI_SUCCESS;
         }
     }
     
 }
-EFI_STATUS TTYWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append){
-    // Buffer est en CHAR16 (2 octets par caractère)
-    CHAR16* Text = (CHAR16*)Buffer;
-    UINTN NumChars = Size / sizeof(CHAR16);
 
+EFI_STATUS TTYWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append){
+    CHAR16* Text = NULL;
+    Char8ToChar16(Buffer,&Text);
+    UINTN NumChars = Size / sizeof(CHAR16);
     for(UINTN i = 0; i < NumChars; i++) {
-        // On n'affiche que les caractères imprimables (au-dessus de 0x20)
-        // ou les retours à la ligne/chariot.
         CHAR16* tmp =L" ";
         if (Text[i] >= 0x20 || Text[i] == L'\n' || Text[i] == L'\r') {
             tmp[0]=Text[i];
@@ -667,7 +748,6 @@ EFI_STATUS TTYWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Appen
     }
     return EFI_SUCCESS;
 }
-
 
 EFI_STATUS ColorRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
     UINT32 GopColor;
@@ -712,8 +792,25 @@ EFI_STATUS ColorRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
         Green = (GopColor >> 8)  & 0xFF;
         Red   = (GopColor >> 16) & 0xFF;
     }
-    // On formate TOUJOURS en RRGGBB pour l'humain (ex: 0xFF0000 pour rouge)
-    UnicodeSPrint(*Buffer, *Size, L"0x%02x%02x%02x", Red, Green, Blue);
+    CHAR16 String16[16];
+    SPrint(String16, sizeof(String16), L"0x%02x%02x%02x", Red, Green, Blue);
+
+    // 2. Conversion en CHAR8 pour ton Shell
+    CHAR8 String8[16];
+    for (UINTN i = 0; i < 9; i++) { // "0xRRGGBB" fait 8 chars + null
+        String8[i] = (CHAR8)String16[i];
+    }
+    UINTN TotalLen = 8; 
+    if (Node->Position >= TotalLen) {
+        *Size = 0; // EOF atteint
+        return EFI_SUCCESS;
+    }
+    UINTN Available = TotalLen - Node->Position;
+    UINTN ToRead = (*Size > Available) ? Available : *Size;
+    CopyMem(*Buffer, &String8[Node->Position], ToRead);
+    Node->Position += ToRead;
+    *Size = ToRead;
+
     return EFI_SUCCESS;
 }
 
@@ -769,13 +866,14 @@ EFI_STATUS ColorWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN App
         default :
             return EFI_NOT_FOUND;
     }
-    
+    CHAR16* buf = NULL;
+    Char8ToChar16(Buffer,&buf);
     CHAR16* SafeBuffer = kmalloc(Size + sizeof(CHAR16));
-    CHAR16* tmp = (CHAR16*)Buffer;
+    CHAR16* tmp = (CHAR16*)buf;
     while(*tmp==L'\r'||*tmp==L'\n'||*tmp==L' ')tmp++;
     if(*tmp == L'\0'){kfree(SafeBuffer); return EFI_SUCCESS;};
-    CopyMem(SafeBuffer, Buffer, Size);
-    SafeBuffer[Size / sizeof(CHAR16)] = L'\0'; // Garantit la fin de chaîne !
+    CopyMem(SafeBuffer, buf, Size*sizeof(CHAR16));
+    SafeBuffer[Size * sizeof(CHAR16)] = L'\0'; // Garantit la fin de chaîne !
     
     UINTN RawHex = StrToHex(SafeBuffer);
 
@@ -794,66 +892,76 @@ EFI_STATUS ColorWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN App
     return EFI_SUCCESS; // N'oublie pas de retourner un statut !
 }
 
+EFI_STATUS ScreenRead(FS_NODE *Node, VOID **Buffer, UINTN *Size){
+    CHAR16 valStr[12];
+    SetMem(valStr,sizeof(valStr),0x00);
+    ValueToString(valStr, 0, (Node->UID == UID_SCREEN_HEIGHT) ? GopInfo->VerticalResolution : GopInfo->HorizontalResolution);
+    CHAR8* result = NULL;
+    Char16ToChar8(valStr, &result);
+    UINTN TotalLen = strlena(result); 
+    if (Node->Position >= TotalLen) {
+        *Size = 0;
+        return EFI_SUCCESS;
+    }
+    UINTN Available = TotalLen - Node->Position;
+    UINTN ToRead = (*Size > Available) ? Available : *Size;
+    CopyMem(*Buffer, &result[Node->Position], ToRead);
+    Node->Position += ToRead;
+    *Size = ToRead;
+    return EFI_SUCCESS;
+}
+
 EFI_STATUS PromptRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
-    Char16ToChar8(ActualConfig.Prompt,*Buffer,0);
-    *Size = 32;
+    CHAR8* result = NULL;
+    Char16ToChar8(ActualConfig.Prompt,&result);
+    UINTN TotalLen = strlena(result); 
+    if (Node->Position >= TotalLen) {
+        *Size = 0;
+        return EFI_SUCCESS;
+    }
+    UINTN Available = TotalLen - Node->Position;
+    UINTN ToRead = (*Size > Available) ? Available : *Size;
+    CopyMem(*Buffer, &result[Node->Position], ToRead);
+    Node->Position += ToRead;
+    *Size = ToRead;
     return EFI_SUCCESS;
 }
 
 EFI_STATUS PromptWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append){
     if(Size==0) return EFI_SUCCESS;
+    CHAR16* buf = NULL;
+    Char8ToChar16(Buffer,&buf);
     SetMem(ActualConfig.Prompt, 32 * sizeof(CHAR16), 0);
-    UINTN WriteSize = (Size / sizeof(CHAR16)) > 31 ? 31 : (Size / sizeof(CHAR16));
-    CopyMem(ActualConfig.Prompt,Buffer,WriteSize * sizeof(CHAR16));
+    UINTN WriteSize = (Size) > 31 ? 31 : (Size);
+    CopyMem(ActualConfig.Prompt,buf,WriteSize * sizeof(CHAR16));
     Node->Size=WriteSize * sizeof(CHAR16);
-
     return EFI_SUCCESS;
 }
 
-
-
-EFI_STATUS Forbidden(FS_NODE* Node, ...) {return EFI_UNSUPPORTED;}
-
-EFI_STATUS GetBootVolumeHandle(EFI_HANDLE* OutDeviceHandle) {
-    EFI_STATUS status;
-    EFI_LOADED_IMAGE* LoadedImage;
-
-    // 1. On demande à l'UEFI les infos sur l'image (notre binaire) en cours d'exécution
-    status = uefi_call_wrapper(BS->OpenProtocol, 6,
-        gImageHandle,
-        &LoadedImageProtocol,
-        (VOID**)&LoadedImage,
-        gImageHandle,
-        NULL,
-        EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL
-    );
-    if (EFI_ERROR(status)) return status;
-
-    // 2. On extrait le DeviceHandle d'où provient notre binaire .efi
-    *OutDeviceHandle = LoadedImage->DeviceHandle;
-
-    // 3. On referme proprement le protocole
-    uefi_call_wrapper(BS->CloseProtocol, 4, gImageHandle, &LoadedImageProtocol, gImageHandle, NULL);
-
+EFI_STATUS NullRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
+    *Size = 0;
     return EFI_SUCCESS;
 }
 
-EFI_STATUS DiskInit(){
-    RootNode=CreateFSNode(NULL,L"",TRUE);
-    if(!RootNode) return EFI_OUT_OF_RESOURCES;
-    EFI_LOADED_IMAGE_PROTOCOL* LoadedImage = NULL;
-    EFI_STATUS status = uefi_call_wrapper(BS->HandleProtocol, 3,gImageHandle, &gEfiLoadedImageProtocolGuid, (VOID**)&LoadedImage);
-    status = ListVolume(&Volumes,&VolumesCount);
-    if(VolumesCount==0||EFI_ERROR(status)||!Volumes) return EFI_ABORTED;
-    RootNode->Volume=&(Volumes[0]);
-    RootNode->List=RootList;
-    RootNode->Open=RootOpen;
-    RootNode->RefCount=1;
-    ActualNode=RootNode;
-    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* VolumeFS = NULL;
-    status = uefi_call_wrapper(BS->HandleProtocol, 3, Volumes[0].Handle, &gEfiSimpleFileSystemProtocolGuid, (VOID**)&VolumeFS);
-    status = uefi_call_wrapper(VolumeFS->OpenVolume, 2, VolumeFS, &RootNode->EfiFile);
-    CHECK_STATUS(status);
-    
+EFI_STATUS NullWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append){
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS ZeroRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
+    SetMem(*Buffer,0,*Size);
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS UrandRead(FS_NODE* Node, VOID** Buffer, UINTN* Size){
+    UINT64 qword_count = (*Size)/8;
+    UINT64* qword_buff = *Buffer;
+    for(UINTN i = 0; i < qword_count; i++){
+        qword_buff[i]=RandValue();
+    }
+    UINT8 char_count = (*Size)%8;
+    UINT8* char_buffer = (*Buffer) + (qword_count*8) ;
+    for (UINTN i = 0; i < char_count; i++){
+        char_buffer[i]=RandValue() & 0xFF;
+    }
     return EFI_SUCCESS;
 }

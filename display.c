@@ -2,35 +2,229 @@
 #include <efi.h>
 #include <efilib.h>
 #include "func.h"
-#include "font.h"
 #include "disk.h"
 #include "graphics.h"
+#include "memory.h"
 
-#define CHAR_HEIGHT 16
-#define CHAR_WIDTH 8
+extern UINT8 _binary_font_psf_start[];
+extern UINT8 _binary_font_psf_end[];
+
+static UINTN CharHeight = 16;
+static UINTN CharWidth = 8;
+static UINTN CharSize = 16;
 
 
 EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* GopInfo = NULL;
-EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
+static EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
 UINT32 *Framebuffer;
 UINT32 *ActualFramebuffer;
-UINT32 *TempFramebuffer;
-UINT32 TempCursorX;
-UINT32 TempCursorY;
-UINT32 CursorX;
-UINT32 CursorY;
-UINT32 MaxChar;
-UINT32 MaxLines;
-BOOLEAN WaitForActualize = FALSE;
+static UINT32 *TempFramebuffer;
+static UINT32 TempCursorX;
+static UINT32 TempCursorY;
+static UINT32 CursorX;
+static UINT32 CursorY;
+static UINT32 MaxChar;
+static UINT32 MaxLines;
+static BOOLEAN WaitForActualize = FALSE;
 UINTN ModeCount = 0;
-FS_NODE* ShellNode;
-
+FS_NODE* ShellNode; 
+PSF2_HEADERS* ActualFontHeaders;
+static UINT8* ActualFontData;
+static UINTN FontSize;
 
 UINT32 RGB(UINT8 Red, UINT8 Green, UINT8 Blue){
     if(!GopInfo)return 0;
     if(GopInfo->PixelFormat == PixelRedGreenBlueReserved8BitPerColor) return Red | (Green << 8) | (Blue << 16);
     if(GopInfo->PixelFormat == PixelBlueGreenRedReserved8BitPerColor) return Blue | (Green << 8) | (Red << 16);
     return 0;
+}
+
+VOID ToggleCursor() {
+    if (!GopInfo || !ActualFramebuffer) return;
+    UINT32 StartX = CursorX * CharWidth;
+    UINT32 StartY = CursorY * CharHeight;
+
+    if (StartX + CharWidth > GopInfo->HorizontalResolution || 
+        StartY + CharHeight > GopInfo->VerticalResolution) return;
+
+    for (UINTN y = 0; y < CharHeight; y++) {
+        for (UINTN x = 0; x < CharWidth; x++) {
+            UINTN index = (GopInfo->PixelsPerScanLine) * (StartY + y) + (StartX + x);
+            UINT32 color = (ActualFramebuffer[index] == 0) ? 0xFFFFFF : 0x000000;
+            RenderPixelBypass(color, StartX + x, StartY + y); 
+        }
+    }
+}
+
+EFI_STATUS InitFont(VOID* FontBuffer) {
+    if (!FontBuffer) return EFI_INVALID_PARAMETER;
+
+    UINT8* magic = (UINT8*)FontBuffer;
+
+    // 1. Nettoyage de l'ancienne police en mémoire s'il y en a une
+    if (ActualFontHeaders && (UINT8*)ActualFontHeaders != _binary_font_psf_start) {
+        kfree(ActualFontHeaders);
+        ActualFontHeaders = NULL;
+        ActualFontData = NULL;
+    }
+
+    // --- TRAITEMENT PSF1 ---
+    if (magic[0] == 0x36 && magic[1] == 0x04) {
+        PSF1_HEADER* psf1 = (PSF1_HEADER*)FontBuffer;
+
+        UINT32 glyph_count = (psf1->mode & 0x01) ? 512 : 256;
+        UINT32 data_size = glyph_count * psf1->charsize;
+
+        // On alloue un header PSF2 fictif/synthétisé pour garder le reste du code unifié !
+        ActualFontHeaders = kmalloc(sizeof(PSF2_HEADERS) + data_size);
+        if (!ActualFontHeaders) return EFI_OUT_OF_RESOURCES;
+
+        // Remplissage d'une structure PSF2 virtuelle
+        ActualFontHeaders->magic[0] = 0x72;
+        ActualFontHeaders->magic[1] = 0xB5;
+        ActualFontHeaders->magic[2] = 0x4A;
+        ActualFontHeaders->magic[3] = 0x86;
+        ActualFontHeaders->version = 0;
+        ActualFontHeaders->headersize = sizeof(PSF2_HEADERS);
+        ActualFontHeaders->flags = 0; // Pas de table Unicode
+        ActualFontHeaders->length = glyph_count;
+        ActualFontHeaders->charsize = psf1->charsize;
+        ActualFontHeaders->height = psf1->charsize;
+        ActualFontHeaders->width = 8;
+
+        ActualFontData = ((UINT8*)ActualFontHeaders) + sizeof(PSF2_HEADERS);
+        CopyMem(ActualFontData, magic + sizeof(PSF1_HEADER), data_size);
+
+        CharWidth = 8;
+        CharHeight = psf1->charsize;
+        CharSize = psf1->charsize;
+        FontSize = sizeof(PSF2_HEADERS) + data_size;
+
+        if (GopInfo) {
+            MaxChar = GopInfo->HorizontalResolution / CharWidth;
+            MaxLines = GopInfo->VerticalResolution / CharHeight;
+        }
+
+        return EFI_SUCCESS;
+    }
+
+    // --- TRAITEMENT PSF2 ---
+    if (magic[0] == 0x72 && magic[1] == 0xB5 && magic[2] == 0x4A && magic[3] == 0x86) {
+        PSF2_HEADERS* psf2 = (PSF2_HEADERS*)FontBuffer;
+
+        UINT32 size = psf2->headersize + (psf2->length * psf2->charsize);
+
+        // Analyse de la table Unicode si présente
+        if (psf2->flags & PSF2_HAS_UNICODE_TABLE) {
+            UINT8 *ptr = (UINT8 *)FontBuffer + size;
+            UINT32 glyphs_found = 0;
+
+            while (glyphs_found < psf2->length) {
+                if (*ptr == 0xFF) {
+                    glyphs_found++;
+                }
+                ptr++;
+            }
+            size = (UINT32)(ptr - (UINT8 *)FontBuffer);
+        }
+
+        ActualFontHeaders = kmalloc(size);
+        if (!ActualFontHeaders) return EFI_OUT_OF_RESOURCES;
+
+        CopyMem(ActualFontHeaders, FontBuffer, size);
+
+        ActualFontData = ((UINT8*)ActualFontHeaders) + ActualFontHeaders->headersize;
+        CharHeight = ActualFontHeaders->height;
+        CharWidth = ActualFontHeaders->width;
+        CharSize = ActualFontHeaders->charsize;
+        FontSize = size;
+
+        if (GopInfo) {
+            MaxChar = GopInfo->HorizontalResolution / CharWidth;
+            MaxLines = GopInfo->VerticalResolution / CharHeight;
+        }
+        return EFI_SUCCESS;
+    }
+
+    return EFI_UNSUPPORTED; // Format ni PSF1 ni PSF2
+}
+
+
+// --- Recherche du Glyphe par UTF-16 (Unicode) ---
+
+UINT32 GetGlyphIndex(CHAR16 unicode_char) {
+    if (!ActualFontHeaders) return 0;
+
+    // Si pas de table Unicode, fallback vers l'index direct
+    if (!(ActualFontHeaders->flags & PSF2_HAS_UNICODE_TABLE)) {
+        return (unicode_char < ActualFontHeaders->length) ? (UINT32)unicode_char : 0;
+    }
+
+    UINT8 *ptr = (UINT8 *)ActualFontHeaders + ActualFontHeaders->headersize + 
+                 (ActualFontHeaders->length * ActualFontHeaders->charsize);
+    UINT8 *end = (UINT8 *)ActualFontHeaders + FontSize;
+
+    UINT32 current_glyph = 0;
+
+    while (ptr < end && current_glyph < ActualFontHeaders->length) {
+        if (*ptr == 0xFF) { // Séparateur PSF2
+            current_glyph++;
+            ptr++;
+            continue;
+        }
+
+        // Décodage UTF-8 de la table Unicode vers UTF-16/UCS-2 pour comparaison
+        UINT32 ucs_val = 0;
+        if ((*ptr & 0x80) == 0) {
+            ucs_val = *ptr++;
+        } else if ((*ptr & 0xE0) == 0xC0) {
+            ucs_val = (*ptr++ & 0x1F) << 6;
+            ucs_val |= (*ptr++ & 0x3F);
+        } else if ((*ptr & 0xF0) == 0xE0) {
+            ucs_val = (*ptr++ & 0x0F) << 12;
+            ucs_val |= (*ptr++ & 0x3F) << 6;
+            ucs_val |= (*ptr++ & 0x3F);
+        } else {
+            ptr++; // Séquence 4 octets ou invalide (non supportée en UTF-16 standard)
+            continue;
+        }
+
+        if (ucs_val == (UINT32)unicode_char) {
+            return current_glyph; // Glyphe trouvé !
+        }
+    }
+
+    return 0; // Glyphe par défaut (rectangle ou '?' en position 0)
+}
+
+// --- Rendu d'un Caractère ---
+
+void RenderChar(CHAR16 c, UINT32 Color) {
+    if (c == L'\n') {
+        CursorX = 0;
+        CursorY++;
+        if (CursorY >= MaxLines) Scroll();
+    } else if (c == L'\b') {
+        if (CursorX > 0) CursorX--;
+    } else if (c == L'\r') {
+        CursorX = 0;
+    } else {
+        UINT32 glyph_idx = GetGlyphIndex(c);
+        UINT8* glyph_ptr = ActualFontData + (glyph_idx * ActualFontHeaders->charsize);
+        UINTN bytes_per_line = (CharWidth + 7) / 8;
+
+        for (UINTN py = 0; py < CharHeight; py++) {
+            for (UINTN px = 0; px < CharWidth; px++) {
+                // Sélection de l'octet et du bit correspondant au pixel (px, py)
+                UINT8 byte = glyph_ptr[py * bytes_per_line + (px / 8)];
+                BOOLEAN pixel_set = (byte & (1 << (7 - (px % 8)))) != 0;
+
+                UINT32 pixel_color = pixel_set ? Color : ActualConfig.Theme.Background;
+                RenderPixel(pixel_color, CursorX * CharWidth + px, CursorY * CharHeight + py);
+            }
+        }
+        CursorX++;
+    }
 }
 
 EFI_STATUS GopInit(){
@@ -50,8 +244,7 @@ EFI_STATUS GopInit(){
         &gopGuid,
         (void**)&gop);
 
-    if (EFI_ERROR(status))
-        return status;
+    CHECK_STATUS(status,NULL,FALSE,NOP);
     
 
     UINT32 BestMode = 0;
@@ -84,11 +277,11 @@ EFI_STATUS GopInit(){
     CursorX = 0;
     CursorY = 0;
 
-    MaxChar = GopInfo->HorizontalResolution / CHAR_WIDTH;
-    MaxLines = GopInfo->VerticalResolution / CHAR_HEIGHT;
+    MaxChar = GopInfo->HorizontalResolution / CharWidth;
+    MaxLines = GopInfo->VerticalResolution / CharHeight;
     
     if(status)CPrint(ActualConfig.Theme.Warning,L"Warning : Error occured while setting se resolution to the highest one (%r)  ; default resolution used", status);
-    return EFI_SUCCESS;
+    return InitFont((PSF2_HEADERS*)_binary_font_psf_start);
 }
 
 
@@ -148,27 +341,13 @@ void ShellPrint(UINT32 color, CONST CHAR16 *fmt, ...){
     va_end(args); 
 
     if (ShellNode) {
-        // CAS 1 : C'est un vrai fichier sur le disque (il possède un EfiFile)
-        if (ShellNode->EfiFile != NULL) {
-            CHAR8* utf8Buffer = kmalloc(SizeChars + 1);
-            Char16ToChar8(buffer, utf8Buffer, 0);
-            
-            // On écrit les octets CHAR8 sur le disque
-            ShellNode->Write(ShellNode, utf8Buffer, SizeChars, TRUE);
-            kfree(utf8Buffer);
-        } 
-        // CAS 2 : C'est un périphérique virtuel (comme \dev\tty)
-        else {
-            // Pas de disque = pas de conversion ! On envoie le CHAR16 natif.
-            // La taille en octets est Nombre de caractères * 2
-            ShellNode->Write(ShellNode, buffer, SizeChars * sizeof(CHAR16), TRUE);
-        }
-    } 
-    // CAS 3 : Pas de redirection, affichage console direct
-    else {
-        CPrint(color, buffer);
+        CHAR8* utf8Buffer = NULL;
+        Char16ToChar8(buffer, &utf8Buffer);
+        ShellNode->Write(ShellNode, utf8Buffer, SizeChars, TRUE);
+        kfree(utf8Buffer);
+    } else {
+        CPrint(color,L"%s",buffer);
     }
-    
     kfree(buffer);
 }
 
@@ -192,11 +371,11 @@ void CPrintFree(UINT32 PosX, UINT32 PosY, UINT32 color, CONST CHAR16 *fmt, ...){
 }
 
 void Scroll() {
-    UINTN line_size = GopInfo->PixelsPerScanLine * CHAR_HEIGHT;
-    UINTN total_pixels = (GopInfo->VerticalResolution - CHAR_HEIGHT) * GopInfo->PixelsPerScanLine;
+    UINTN line_size = GopInfo->PixelsPerScanLine * CharHeight;
+    UINTN total_pixels = (GopInfo->VerticalResolution - CharHeight) * GopInfo->PixelsPerScanLine;
 
     CopyMem(Framebuffer,Framebuffer + line_size,total_pixels * sizeof(UINT32));
-    UINTN* last_line64 = (UINTN*)&Framebuffer[(GopInfo->VerticalResolution - CHAR_HEIGHT) * GopInfo->PixelsPerScanLine];
+    UINTN* last_line64 = (UINTN*)&Framebuffer[(GopInfo->VerticalResolution - CharHeight) * GopInfo->PixelsPerScanLine];
     UINTN line_blocks64 = line_size / 2;
     UINTN double_pixel_color = ((UINTN)ActualConfig.Theme.Background << 32) | ActualConfig.Theme.Background;
     for (UINTN i = 0; i < line_blocks64; i++)
@@ -207,48 +386,6 @@ void Scroll() {
 
     CursorY = MaxLines - 1;
 
-}
-
-UINT16 GetCharIndex(CHAR16 c) {
-    for(UINTN i = 0; i < sizeof(font_default_code_points)/sizeof(font_default_code_points[0]); i++){
-        if(font_default_code_points[i]==c)
-            return i;
-    }
-    for(UINTN i = 0; i < sizeof(font_default_code_points)/sizeof(font_default_code_points[0]); i++){
-        if(font_default_code_points[i]=='?')
-            return i;
-    }
-    return 0; 
-    
-}
-
-void RenderChar(CHAR16 c,UINT32 Color){
-    if(c==L'\n'){
-        CursorX=0;
-        CursorY++;
-        if(CursorY>=MaxLines)
-            Scroll();
-        
-    } else if (c==L'\b'){
-        if(CursorX!=0)
-            CursorX--;
-    }   else if (c == L'\r') {
-        CursorX = 0;
-    }
-     else {
-        UINT16 index = GetCharIndex(c);
-        for(CHAR8 Y = 0;Y<CHAR_HEIGHT;Y++){
-            UINT8 line_byte = font_default_data[index][Y][0];
-            for(CHAR8 X = 0;X<CHAR_WIDTH;X++){
-                if (line_byte & (1 << (7 - X)))
-                    RenderPixel(Color, CursorX*CHAR_WIDTH + X, CursorY*CHAR_HEIGHT + Y);
-                else 
-                    RenderPixel(ActualConfig.Theme.Background, CursorX*CHAR_WIDTH + X, CursorY*CHAR_HEIGHT + Y);
-                
-            }
-        }
-        CursorX++;
-    }
 }
 
 void RenderString(CHAR16* buffer,UINT32 Color){
@@ -278,6 +415,7 @@ EFI_STATUS SetCursor(INT64 X,INT64 Y){
     if(Y>=0)
         if(Y<=MaxLines)
             CursorY=Y;
+    Actualize();
     return EFI_SUCCESS;
 }
 
@@ -306,7 +444,7 @@ GopModeList* GetModeList(){
 EFI_STATUS SetMode(UINTN Mode)
 {
     EFI_STATUS status = uefi_call_wrapper(gop->SetMode,2,gop,Mode);
-    CHECK_STATUS(status);
+    CHECK_STATUS(status,NULL,TRUE,;);
     GopInfo = gop->Mode->Info;
     ActualFramebuffer = (UINT32*)(UINTN)gop->Mode->FrameBufferBase;
     if(Framebuffer!=ActualFramebuffer)kfree(Framebuffer);
@@ -320,7 +458,7 @@ EFI_STATUS SetMode(UINTN Mode)
     CursorX = 0;
     CursorY = 0;
 
-    MaxChar = GopInfo->HorizontalResolution / 8;
-    MaxLines = GopInfo->VerticalResolution / CHAR_HEIGHT;
+    MaxChar = GopInfo->HorizontalResolution / CharWidth;
+    MaxLines = GopInfo->VerticalResolution / CharHeight;
     return EFI_SUCCESS;
 }

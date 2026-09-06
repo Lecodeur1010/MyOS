@@ -3,3 +3,4 @@
 main.so
 NvVars
 *.efi
+*.img

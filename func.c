@@ -4,11 +4,8 @@
 #include "display.h"
 #include "disk.h"
 #include "graphics.h"
+#include "memory.h"
 
-VOID** Garbage = NULL; //Garbage collector ptr list
-BOOLEAN GarbageState = FALSE;
-UINTN GarbageSize = 0; //Allocated size (in ptr)
-UINTN GarbageCount = 0; //Used space (in ptr)
 EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *InputEx = NULL;
 EFI_HANDLE gImageHandle;
 
@@ -19,10 +16,23 @@ AZERTY_ENTRY AzertyMap[128];
 
 EFI_INPUT_KEY WaitForInput() {
     EFI_KEY_DATA KeyData;
-    UINTN index;
     EFI_STATUS status;
+    EFI_EVENT TimerEvent;
+    EFI_EVENT Events[2];
+    UINTN Index;
 
-    uefi_call_wrapper(ST->BootServices->WaitForEvent, 3, 1, &InputEx->WaitForKeyEx, &index);
+    uefi_call_wrapper(BS->CreateEvent, 5, EVT_TIMER, 0, NULL, NULL, &TimerEvent);
+    uefi_call_wrapper(BS->SetTimer, 3, TimerEvent, TimerPeriodic, 5000000); // 500ms en unités de 100ns
+    Events[0] = ST->ConIn->WaitForKey; // Événement clavier UEFI
+    Events[1] = TimerEvent;
+    while(1) {
+        uefi_call_wrapper(BS->WaitForEvent, 3, 2, Events, &Index);
+        if (Index == 0) { 
+            break; 
+        } else if (Index == 1) { 
+            ToggleCursor(); 
+        }
+    }
     status = uefi_call_wrapper(InputEx->ReadKeyStrokeEx, 2, InputEx, &KeyData);
     
     if (EFI_ERROR(status)) {
@@ -32,7 +42,7 @@ EFI_INPUT_KEY WaitForInput() {
 
     UINT32 state = KeyData.KeyState.KeyShiftState;
     BOOLEAN isAltGr = (state & EFI_RIGHT_ALT_PRESSED);
-    BOOLEAN isShift = (state & (EFI_LEFT_SHIFT_PRESSED | EFI_RIGHT_SHIFT_PRESSED));
+    BOOLEAN isShift = (state & (EFI_LEFT_SHIFT_PRESSED | EFI_RIGHT_SHIFT_PRESSED | EFI_CAPS_LOCK_ACTIVE));
     CHAR16 chr = KeyData.Key.UnicodeChar;
 
     if (KeyData.Key.ScanCode == 0x0015) {
@@ -186,19 +196,6 @@ void InitAzertyMap() {
     AzertyMap[L'+']=AzertyMap[L'='];
 }
 
-static UINTN AllocCount = 0;
-
-void* kmalloc(UINTN size){
-    AllocCount++;
-    void* buffer = NULL;
-    EFI_STATUS status = uefi_call_wrapper(ST->BootServices->AllocatePool,3,EfiBootServicesData,size,&buffer);
-    return EFI_ERROR(status) ? NULL : buffer;
-}
-void kfree(void* pointer){
-    AllocCount--;
-    uefi_call_wrapper(BS->FreePool,1,pointer);
-}
-
 void GetConfigValue(CHAR16* Line, CHAR16** Key, CHAR16** Value) {
     *Key = Line;
     *Value = NULL;
@@ -243,6 +240,9 @@ void ApplyConfig(CHAR16* Key, CHAR16* Value) {
     else if (StrCmp(Key, L"theme.success") == 0) ActualConfig.Theme.Sucess = StrToHex(Value);
     else if (StrCmp(Key, L"theme.bg") == 0) ActualConfig.Theme.Background = StrToHex(Value);
     else if (StrCmp(Key, L"prompt") == 0) StrCpy(ActualConfig.Prompt,Value);
+    else if (StrCmp(Key, L"font") == 0) {
+        
+    }
     else CPrint(ActualConfig.Theme.Warning,L"<%s> not reconised\n",Key);
 }
 
@@ -250,7 +250,7 @@ EFI_STATUS LoadCFG(CONST CHAR16* Path) {
     if(!Path) return EFI_INVALID_PARAMETER;
     FS_NODE *Node;
     EFI_STATUS status = VFSOpen(ActualNode, Path, &Node, EFI_FILE_MODE_READ, 0);
-    CHECK_STATUS(status);
+    CHECK_STATUS(status,NULL,TRUE,;);
     
     UINTN Size = 0;
     CHAR8* Buff = NULL;
@@ -258,8 +258,8 @@ EFI_STATUS LoadCFG(CONST CHAR16* Path) {
     if(EFI_ERROR(status)){ Node->Close(Node); return status; }
     
     // Allocation sécurisée : taille du buffer * 2 octets par CHAR16
-    CHAR16 *ConfigFileContent = kmalloc((Size + 1) * sizeof(CHAR16));
-    Char8ToChar16(Buff, ConfigFileContent, Size);
+    CHAR16 *ConfigFileContent = NULL;
+    Char8ToChar16(Buff, &ConfigFileContent);
     ConfigFileContent[Size]=L'\0';
     
     kfree(Buff); 
@@ -287,36 +287,127 @@ EFI_STATUS LoadCFG(CONST CHAR16* Path) {
     return EFI_SUCCESS;
 }
 
-UINTN Char16ToChar8(CONST CHAR16* Src, CHAR8* Dest, UINTN MaxLenght) {
-    UINTN i = 0;
-    if(MaxLenght==0)MaxLenght--;//Underflow -> near infinite
-    while (Src[i] != L'\0'&& i<MaxLenght) {
-        if (Src[i] < 0x80) { 
-            Dest[i] = (CHAR8)Src[i]; 
-        } else {
-            Dest[i] = '?'; 
-        }
-        i++;
-    }
-    Dest[i] = '\0';
-    return i;
+UINTN AsciiSPrint(CHAR8 *Buffer, UINTN BufferSize, CONST CHAR8 *Format, ...) {
+    va_list Args;
+    va_start(Args, Format);
+    UINTN Length = AsciiVSPrint(Buffer, BufferSize, Format, Args);
+    va_end(Args);
+    return Length;
 }
 
-UINTN Char8ToChar16(CONST CHAR8* Src, CHAR16* Dest, UINTN MaxLenght){
-    UINTN i = 0;
-    if(MaxLenght==0)MaxLenght--;//Underflow -> near infinite
-    while (Src[i] != L'\0'&& i<MaxLenght) {
-        Dest[i] = (CHAR16)Src[i]; 
-        i++;
+UINTN Char16ToChar8(CONST CHAR16* Src, CHAR8** Dest) {
+    if (Src == NULL || Dest == NULL) {
+        if (Dest != NULL) *Dest = NULL;
+        return 0;
     }
-    Dest[i] = L'\0';
-    return i;
+
+    // 1. Calcul de la taille exacte nécessaire en octets UTF-8
+    UINTN Utf8ByteCount = 0;
+    for (UINTN i = 0; Src[i] != L'\0'; i++) {
+        UINT16 c = Src[i];
+        if (c <= 0x007F)      Utf8ByteCount += 1; // ASCII standard
+        else if (c <= 0x07FF) Utf8ByteCount += 2; // Accents (é, à, è, etc.)
+        else                  Utf8ByteCount += 3; // Caractères spéciaux/asiatiques
+    }
+
+    // 2. Allocation dynamique de la taille exacte (+1 pour le '\0')
+    *Dest = kmalloc(Utf8ByteCount + 1);
+    if (*Dest == NULL) {
+        return 0;
+    }
+
+    // 3. Conversion UTF-16 vers UTF-8
+    UINTN j = 0;
+    for (UINTN i = 0; Src[i] != L'\0'; i++) {
+        UINT16 c = Src[i];
+        if (c <= 0x007F) {
+            (*Dest)[j++] = (CHAR8)c;
+        } else if (c <= 0x07FF) {
+            (*Dest)[j++] = (CHAR8)(0xC0 | ((c >> 6) & 0x1F));
+            (*Dest)[j++] = (CHAR8)(0x80 | (c & 0x3F));
+        } else {
+            (*Dest)[j++] = (CHAR8)(0xE0 | ((c >> 12) & 0x0F));
+            (*Dest)[j++] = (CHAR8)(0x80 | ((c >> 6) & 0x3F));
+            (*Dest)[j++] = (CHAR8)(0x80 | (c & 0x3F));
+        }
+    }
+    (*Dest)[j] = '\0';
+
+    return j;
+}
+
+UINTN Char8ToChar16(CONST CHAR8* Src, CHAR16** Dest) {
+    if (Src == NULL || Dest == NULL) {
+        if (Dest != NULL) *Dest = NULL;
+        return 0;
+    }
+
+    UINTN SrcLen = strlena(Src); // Ou AsciiStrLen(Src)
+
+    // 1. Calcul du nombre de caractères Unicode (CHAR16)
+    UINTN CharCount = 0;
+    for (UINTN i = 0; i < SrcLen; i++) {
+        // En UTF-8, les octets de continuation commencent par les bits 10xxxxxx (0x80..0xBF)
+        if (((UINT8)Src[i] & 0xC0) != 0x80) {
+            CharCount++;
+        }
+    }
+
+    // 2. Allocation dynamique du buffer CHAR16 (+1 pour le L'\0')
+    *Dest = kmalloc((CharCount + 1) * sizeof(CHAR16));
+    if (*Dest == NULL) {
+        return 0;
+    }
+
+    // 3. Décodage UTF-8 vers UTF-16
+    UINTN i = 0, j = 0;
+    while (i < SrcLen && Src[i] != '\0') {
+        UINT32 c = (UINT8)Src[i];
+
+        if (c < 0x80) { // 1 octet (ASCII)
+            (*Dest)[j++] = (CHAR16)c;
+            i += 1;
+        } else if ((c & 0xE0) == 0xC0 && i + 1 < SrcLen) { // 2 octets (Accents)
+            (*Dest)[j++] = (CHAR16)(((c & 0x1F) << 6) | ((UINT8)Src[i + 1] & 0x3F));
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0 && i + 2 < SrcLen) { // 3 octets
+            (*Dest)[j++] = (CHAR16)(((c & 0x0F) << 12) | (((UINT8)Src[i + 1] & 0x3F) << 6) | ((UINT8)Src[i + 2] & 0x3F));
+            i += 3;
+        } else {
+            // Sécurité si séquence UTF-8 corrompue
+            i++;
+        }
+    }
+    (*Dest)[j] = L'\0';
+
+    return j; // Renvoie le nombre de CHAR16 écrits (hors NULL)
+}
+
+VOID FormatBytes(UINTN bytes, CHAR16* out_str) {
+    const CHAR16* units[] = { L"B", L"KiB", L"MiB", L"GiB", L"TiB" };
+    UINTN unit_index = 0;
+    UINTN val = bytes;
+    UINTN remainder = 0;
+
+    // Convertit en divisant par 1024 à chaque étape
+    while (val >= 1024 && unit_index < 4) {
+        remainder = val % 1024;
+        val /= 1024;
+        unit_index++;
+    }
+
+    if (unit_index == 0) {
+        // Octets bruts
+        SPrint(out_str, 64, L"%u B", val);
+    } else {
+        // Calcul d'une décimale avec des entiers : (reste * 10) / 1024
+        UINTN decimal = (remainder * 10) / 1024;
+        SPrint(out_str, 64, L"%u.%u %s", val, decimal, units[unit_index]);
+    }
 }
 
 UINTN StrToHex(CONST CHAR16* Str) {
     UINTN Result = 0;
-    
-    // Ignorer le préfixe "0x" ou "0X" si l'utilisateur l'a écrit
     if (Str[0] == L'0' && (Str[1] == L'x' || Str[1] == L'X')) {
         Str += 2;
     }
@@ -332,12 +423,8 @@ UINTN StrToHex(CONST CHAR16* Str) {
         } else if (c >= L'A' && c <= L'F') {
             Value = c - L'A' + 10;
         } else {
-            // Caractère invalide (espace, lettre hors A-F), on s'arrête
             break; 
         }
-
-        // On décale le résultat de 4 bits vers la gauche (une place en hex) 
-        // et on ajoute la nouvelle valeur
         Result = (Result << 4) | Value;
         Str++;
     }
@@ -345,6 +432,42 @@ UINTN StrToHex(CONST CHAR16* Str) {
     return Result;
 }
 
+UINTN HexToStr(UINTN Value, CHAR16* Dest, UINTN MaxLength, BOOLEAN IncludePrefix, UINTN MinWidth) {
+    if (Dest == NULL || MaxLength == 0) return 0;
+
+    static CONST CHAR16 HexDigits[] = {
+        L'0', L'1', L'2', L'3', L'4', L'5', L'6', L'7',
+        L'8', L'9', L'A', L'B', L'C', L'D', L'E', L'F', L'\0'
+    };
+    CHAR16 TempBuf[32];
+    UINTN TempIndex = 0;
+    UINTN DestIndex = 0;
+    if (IncludePrefix) {
+        if (MaxLength <= 2) {
+            Dest[0] = L'\0';
+            return 0;
+        }
+        Dest[DestIndex++] = L'0';
+        Dest[DestIndex++] = L'x';
+    }
+    if (Value == 0) {
+        TempBuf[TempIndex++] = L'0';
+    } else {
+        while (Value > 0 && TempIndex < 32) {
+            TempBuf[TempIndex++] = HexDigits[Value & 0x0F];
+            Value >>= 4;
+        }
+    }
+    while (TempIndex < MinWidth && TempIndex < 32) {
+        TempBuf[TempIndex++] = L'0';
+    }
+    while (TempIndex > 0 && DestIndex < MaxLength - 1) {
+        Dest[DestIndex++] = TempBuf[--TempIndex];
+    }
+
+    Dest[DestIndex] = L'\0';
+    return DestIndex;
+}
 
 void HookUefiException(UINT8 vector, void(*handler)(void));
 
@@ -392,12 +515,6 @@ EFI_STATUS GeneralInit() {
         &InputExGuid,
         (VOID**)&InputEx
     );
-    FS_NODE* tmp;
-    status = VFSOpen(RootNode,L"\\dev\\prompt",&tmp,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE,0);
-    if(!EFI_ERROR(status)){
-        tmp->Write(tmp,L"%s > ",sizeof(L" %s > "),FALSE);
-        tmp->Close(tmp);
-    }
 
     ActualConfig.Theme.Info = RGB(255,255,255);
     ActualConfig.Theme.File = RGB(0,127,255);
@@ -441,6 +558,12 @@ EFI_STATUS GeneralInit() {
     HookUefiException(29, isr_29);
     HookUefiException(30, isr_30);
     HookUefiException(31, isr_31);
+    FS_NODE* tmp;
+    status = VFSOpen(RootNode,L"\\dev\\prompt",&tmp,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE,0);
+    if(!EFI_ERROR(status)){
+        tmp->Write(tmp,"%s > ",sizeof(" %s > "),FALSE);
+        tmp->Close(tmp);
+    }
     return status;
 }
 EFI_STATUS SetKeyboardLeds(UINT8 mode) {
@@ -578,4 +701,57 @@ void HookUefiException(UINT8 vector, void(*handler)(void)) {
     idt[vector].Reserved     = 0;
 
     __asm__ __volatile__("sti");
+}
+
+BOOLEAN CheckRdrandSupport() {
+    UINT32 eax, ebx, ecx, edx;
+    // CPUID leaf 1, bit 30 du registre ECX indique le support RDRAND
+    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(1));
+    return (ecx & (1 << 30)) != 0;
+}
+
+// Génération aléatoire matérielle
+BOOLEAN GetHardwareRandom(UINT64 *val) {
+    UINT8 success;
+    __asm__ volatile("rdrand %0; setc %1" : "=r"(*val), "=qm"(success));
+    return success != 0;
+}
+
+// Fallback RDTSC
+UINT64 GetRdtsc() {
+    UINT32 low, high;
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    return ((UINT64)high << 32) | low;
+}
+
+// Fonction globale pour ton OS
+UINT64 RandValue() {
+    UINT64 val;
+    if (GetHardwareRandom(&val)) {
+        return val;
+    }
+    return GetRdtsc();
+}
+
+UINT64 GetTSCFrequencyPerMs(VOID) {
+    EFI_EVENT TimerEvent;
+    UINTN Index;
+    EFI_STATUS Status;
+
+    // 1. Créer un événement de timer
+    Status = uefi_call_wrapper(BS->CreateEvent, 5, EVT_TIMER, TPL_CALLBACK, NULL, NULL, &TimerEvent);
+    if (EFI_ERROR(Status)) return 0;
+
+    // 2. Armer le timer pour 10 ms (100 000 x 100 ns)
+    uefi_call_wrapper(BS->SetTimer, 3, TimerEvent, TimerRelative, 100000ULL);
+
+    // 3. Mesurer les cycles CPU pendant ces 10 ms
+    UINT64 StartTSC = ReadTSC();
+    uefi_call_wrapper(BS->WaitForEvent, 3, 1, &TimerEvent, &Index);
+    UINT64 EndTSC = ReadTSC();
+
+    uefi_call_wrapper(BS->CloseEvent, 1, TimerEvent);
+
+    // 4. (Cycles en 10ms) / 10 = Cycles par milliseconde
+    return (EndTSC - StartTSC) / 10;
 }

@@ -12,23 +12,29 @@ typedef struct {
 
 typedef struct _FS_NODE {
     CHAR16 Name[256];
-    EFI_FILE_PROTOCOL* EfiFile; // NULL si virtuel (\mnt)
-    VOLUME* Volume;
-    BOOLEAN IsDirectory;
+    EFI_FILE_PROTOCOL* EfiFile; // NULL if virtaul (\mnt, or \dev)
+    VOLUME* Volume; 
+    BOOLEAN IsDirectory; 
     struct _FS_NODE* Parent;
-    UINTN RefCount;
-    UINTN Size;
+    UINTN RefCount; //how many times it's used actually
+    UINTN Size; //-1 if not applicable ( eg. \dev\zero)
     UINTN UID; //General purpose UID
+    UINTN Position; //Cursor, do not edit directly
     EFI_STATUS (*Open) (struct _FS_NODE* Parent, CONST CHAR16* Path, struct _FS_NODE** OutNode, UINT64 Mode, UINT64 Attributes);
     EFI_STATUS (*Read) (struct _FS_NODE* Node, VOID** Buffer, UINTN* Size);
     EFI_STATUS (*Write)(struct _FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append);
     EFI_STATUS (*List) (struct _FS_NODE* Node, EFI_FILE_INFO*** Content, UINTN* Count);
+    EFI_STATUS (*Seek) (struct _FS_NODE* Node, UINTN Pos);
+    EFI_STATUS (*Reset) (struct _FS_NODE* Node);
     EFI_STATUS (*Close) (struct _FS_NODE* Node);
     EFI_STATUS (*Delete) (struct _FS_NODE* Node);
 } FS_NODE;
 
 typedef enum {
     UID_ROOT,
+    UID_NULL,
+    UID_ZERO,
+    UID_URAND,
     UID_TTY,
     UID_PROMPT,
     UID_COLOR,
@@ -74,14 +80,14 @@ EFI_STATUS VFSRead(FS_NODE *Node, void **Buffer, UINTN *Size);
 EFI_STATUS MNTOpen(FS_NODE *Parent, const CHAR16 *Path, FS_NODE **OutNode, UINT64 Mode, UINT64 Attributes);
 EFI_STATUS MNTList(FS_NODE *Node, EFI_FILE_INFO ***Content, UINTN *Count);
 
-EFI_STATUS Close(FS_NODE *Node);
-
 EFI_STATUS FSOpen(FS_NODE *Parent, const CHAR16 *Path, FS_NODE **OutNode, UINT64 Mode, UINT64 Attributes);
 EFI_STATUS FSList(FS_NODE *Node, EFI_FILE_INFO ***Content, UINTN *Count);
 EFI_STATUS FSRead(FS_NODE *Node, void **Buffer, UINTN *Size);
 EFI_STATUS FSWrite(FS_NODE *Node, const void *Buffer, UINTN Size, BOOLEAN Append);
 EFI_STATUS FSClose(FS_NODE *Node);
 EFI_STATUS FSDelete(FS_NODE *Node);
+EFI_STATUS FSSeek(FS_NODE* Node, UINTN Pos);
+EFI_STATUS FSReset(FS_NODE* Node);
 
 EFI_STATUS RootOpen(FS_NODE *Parent, const CHAR16 *Element, FS_NODE **OutNode, UINT64 Mode, UINT64 Attributes);
 EFI_STATUS RootList(FS_NODE *Node, EFI_FILE_INFO ***Content, UINTN *Count);
@@ -89,7 +95,10 @@ EFI_STATUS RootList(FS_NODE *Node, EFI_FILE_INFO ***Content, UINTN *Count);
 EFI_STATUS DevOpen(FS_NODE *Parent, const CHAR16 *Path, FS_NODE **OutNode, UINT64 Mode, UINT64 Attributes);
 EFI_STATUS DevList(FS_NODE *Node, EFI_FILE_INFO ***Content, UINTN *Count);
 
-EFI_STATUS Forbidden(FS_NODE *Node, ...);
+EFI_STATUS Forbidden(FS_NODE* Node,...);
+EFI_STATUS Close(FS_NODE *Node);
+EFI_STATUS Reset(FS_NODE* Node);
+EFI_STATUS Seek(FS_NODE* Node, UINTN Pos);
 
 EFI_STATUS TTYRead(FS_NODE* Node, VOID** Buffer, UINTN* Size);
 EFI_STATUS TTYWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append);
@@ -98,7 +107,10 @@ EFI_STATUS PromptWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Ap
 EFI_STATUS ColorRead(FS_NODE* Node, VOID** Buffer, UINTN* Size);
 EFI_STATUS ColorWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append);
 EFI_STATUS ScreenRead(FS_NODE* Node, VOID** Buffer, UINTN* Size);
-EFI_STATUS ScreenWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append);
+EFI_STATUS NullRead(FS_NODE* Node, VOID** Buffer, UINTN* Size);
+EFI_STATUS NullWrite(FS_NODE* Node, CONST VOID* Buffer, UINTN Size, BOOLEAN Append);
+EFI_STATUS ZeroRead(FS_NODE* Node, VOID** Buffer, UINTN* Size);
+EFI_STATUS UrandRead(FS_NODE* Node, VOID** Buffer, UINTN* Size);
 
 EFI_STATUS GetBootVolumeHandle(EFI_HANDLE *OutDeviceHandle);
 EFI_STATUS DiskInit(void);
